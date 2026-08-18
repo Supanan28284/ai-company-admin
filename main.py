@@ -42,7 +42,6 @@ def load_data_from_google_sheets():
     """ดึงข้อมูล Admin และประวัติแชทจาก Google Sheets มาใส่ใน RAM"""
     global ADMINS_DB, CHAT_SESSIONS_DB
     try:
-        # 1. โหลดข้อมูล Admin จากชีต Admin_Config
         resp_admin = requests.get(GAS_WEB_APP_URL, params={"action": "get_admins"})
         if resp_admin.status_code == 200:
             rows = resp_admin.json()
@@ -61,17 +60,20 @@ def load_data_from_google_sheets():
                 company = str(row[2]) if len(row) > 2 and str(row[2]).strip() else "Kelyfos facade"
                 channels_raw = str(row[3]) if len(row) > 3 else "[]"
                 keywords = str(row[4]) if len(row) > 4 else "ลดราคา, ขอราคาพิเศษ"
-                system_prompt = str(row[5]) if len(row) > 5 else "คุณคือแอดมิน AI อัจฉริยะ"
+                system_prompt = str(row[5]) if len(row) > 5 else "คุณคือแอดมิน AI อัจฉริยะ ตอบกระชับ เป็นมืออาชีพ"
+                gender = str(row[6]) if len(row) > 6 and str(row[6]).strip() else "ครับ"
 
                 loaded_admins.append({
                     "id": a_id,
                     "name": name,
                     "company": company,
                     "status": "คล่องแคล่ว",
+                    "gender": gender,
                     "channels": [c.strip() for c in channels_raw.replace("[","").replace("]","").replace("'","").split(",") if c.strip()],
                     "keywords": keywords,
                     "system_prompt": system_prompt,
                     "categories": [],
+                    "faq_pairs": [],
                     "pending_count": 0
                 })
             
@@ -80,7 +82,6 @@ def load_data_from_google_sheets():
             else:
                 ADMINS_DB = []
 
-        # 2. โหลดประวัติแชทจากชีต Customer_Chat_Logs มาใส่ CHAT_SESSIONS_DB
         resp_chat = requests.get(GAS_WEB_APP_URL, params={"action": "get_chats"})
         if resp_chat.status_code == 200:
             chat_rows = resp_chat.json()
@@ -128,6 +129,9 @@ def load_data_from_google_sheets():
             for a_key, customers in temp_chats.items():
                 if a_key not in CHAT_SESSIONS_DB:
                     CHAT_SESSIONS_DB[a_key] = []
+                # สลับลำดับให้ข้อความล่าสุดขึ้นก่อนในระดับเซสชันแชท
+                for cust_id, cust_data in customers.items():
+                    cust_data["logs"] = list(reversed(cust_data["logs"]))
                 CHAT_SESSIONS_DB[a_key] = list(customers.values())
 
     except Exception as e:
@@ -136,7 +140,6 @@ def load_data_from_google_sheets():
 load_data_from_google_sheets()
 
 
-# ฟังก์ชันส่งข้อมูลแชทไปบันทึกบน Google Sheets
 def save_chat_to_google_sheet(customer_id, customer_name, message, sender_type):
     if not GAS_WEB_APP_URL:
         return
@@ -153,7 +156,6 @@ def save_chat_to_google_sheet(customer_id, customer_name, message, sender_type):
         print(f"Error syncing chat to Google Sheet: {e}")
 
 
-# ฟังก์ชันส่งข้อมูลตั้งค่า Admin ไปบันทึกบน Google Sheets (ชีต Admin_Config)
 def sync_admin_to_sheet(admin_data):
     if not GAS_WEB_APP_URL:
         return
@@ -162,6 +164,7 @@ def sync_admin_to_sheet(admin_data):
         "admin_id": admin_data["id"],
         "name": admin_data["name"],
         "company": admin_data["company"],
+        "gender": admin_data.get("gender", "ครับ"),
         "channels": str(admin_data["channels"]),
         "keywords": admin_data["keywords"],
         "system_prompt": admin_data["system_prompt"]
@@ -172,7 +175,6 @@ def sync_admin_to_sheet(admin_data):
         print(f"Error syncing admin to Google Sheet: {e}")
 
 
-# 🗑️ ฟังก์ชันส่งคำสั่งลบ Admin ไปยัง Google Sheets
 def delete_admin_from_sheet(admin_id):
     if not GAS_WEB_APP_URL:
         return
@@ -187,22 +189,34 @@ def delete_admin_from_sheet(admin_id):
 
 
 # ----------------------------------------------------
-# 🧠 ฟังก์ชันเรียกใช้งาน Gemini AI (ใช้ Profile ครบทุกหัวข้อ + Knowledge)
+# 🧠 ฟังก์ชันเรียกใช้งาน Gemini AI (ปรับปรุงโทนเสียงกระชับ + FAQ Matching + Gender)
 # ----------------------------------------------------
 def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: str) -> str:
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "ใส่_API_KEY_ของคุณที่นี่":
+    # ตรวจสอบ Dynamic FAQ Pairs ก่อนส่งให้ Gemini หากมีคำถามตรงกับคลังสคริปต์
+    faq_pairs = admin_info.get("faq_pairs", [])
+    for faq in faq_pairs:
+        trigger = faq.get("trigger", "").strip()
+        answer = faq.get("answer", "").strip()
+        if trigger and trigger.lower() in customer_message.lower():
+            return answer
+
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "ใส่_API_KEY_克的ที่นี่":
         return f"[จำลอง AI]: ได้รับข้อความ '{customer_message}' แล้ว (กรุณาตรวจสอบ Gemini API Key)"
     
     try:
-        # รวมข้อมูลทุกหัวข้อมาสร้างเป็น Profile ให้ AI เข้าใจตัวตนและขอบเขตงานอย่างสมบูรณ์
+        gender_term = admin_info.get('gender', 'ครับ')
         profile_instruction = f"""
         [ข้อมูลตัวตนและแบรนด์]:
         - ชื่อตัวแทน/ผู้ดูแล: {admin_info.get('name', 'Admin')}
         - บริษัท/แบรนด์: {admin_info.get('company', 'Kelyfos Facade')}
-        - ช่องทางที่ดูแล: {', '.join(admin_info.get('channels', []))}
+        - สรรพนามลงท้าย/เพศการพูดคุย: ลงท้ายด้วย '{gender_term}'
         
         [คำสั่งพฤติกรรมและบุคลิก (System Prompt)]:
-        {admin_info.get('system_prompt', 'คุณคือแอดมิน AI')}
+        {admin_info.get('system_prompt', 'คุณคือแอดมิน AI อัจฉริยะ ตอบกระชับ ชัดเจน ตรงประเด็น เป็นมืออาชีพ')}
+
+        [กฎเหล็กการตอบข้อความ]:
+        1. ตอบให้กระชับ เป็นมืออาชีพ ห้ามเยิ่นเย้อ อธิบายเฉพาะสิ่งที่ลูกค้าถาม
+        2. ใช้สรรพนามลงท้ายว่า '{gender_term}' ทุกครั้งอย่างสม่ำเสมอ
 
         [เงื่อนไขคีย์เวิร์ดส่งต่อทีมงาน]:
         {admin_info.get('keywords', '')}
@@ -239,7 +253,7 @@ async def main_dashboard(request: Request):
 
     rows_html = ""
     if not ADMINS_DB:
-        rows_html = "<tr><td colspan='6' style='text-align: center; color: #64748b; padding: 20px;'>ยังไม่มีข้อมูล Admin ใน Google Sheets (ลองกดสร้างใหม่ด้านบน)</td></tr>"
+        rows_html = "<tr><td colspan='6' style='text-align: center; color: #64748b; padding: 20px;'>ยังไม่มีข้อมูล Admin ใน Google Sheets</td></tr>"
     else:
         for admin in ADMINS_DB:
             badge_bg = "#fee2e2" if admin.get("pending_count", 0) > 0 else "#dcfce7"
@@ -249,7 +263,7 @@ async def main_dashboard(request: Request):
             
             rows_html += f"""
             <tr>
-                <td style="font-weight: 600; color: #0f172a;">{admin['name']}</td>
+                <td style="font-weight: 600; color: #0f172a;">{admin['name']} <span style="font-size:11px; color:#64748b; font-weight:normal;">({admin.get('gender', 'ครับ')})</span></td>
                 <td style="color: #475569;">{admin['company']}</td>
                 <td><span style="color: #059669; font-weight: 500;">{admin['status']}</span></td>
                 <td style="color: #475569; font-size: 13px;">{channels_str}</td>
@@ -286,7 +300,7 @@ async def main_dashboard(request: Request):
         <body>
             <div class="container">
                 <div class="header">
-                    <h2>🤖 ศูนย์ควบคุม AI สำหรับผู้ดูแลระบบ</h2>
+                    <h2>🤖 ศูนย์ควบคุม AI สำหรับผู้ดูแลระบบ (Enterprise AI Management)</h2>
                     <a href="/create" class="btn-create">+ สร้าง AI สำหรับผู้ดูแลระบบ</a>
                 </div>
                 <div class="panel">
@@ -316,9 +330,6 @@ async def main_dashboard(request: Request):
     return HTMLResponse(content=html_content)
 
 
-# ----------------------------------------------------
-# 🗑️ เส้นทางสำหรับลบ Admin (Delete Route)
-# ----------------------------------------------------
 @app.get("/delete/{admin_id}")
 async def delete_admin(admin_id: int):
     delete_admin_from_sheet(admin_id)
@@ -328,16 +339,17 @@ async def delete_admin(admin_id: int):
 
 
 # ----------------------------------------------------
-# 2. Config Form & Save API
+# 2. Config Form & Save API (รองรับเพศ & FAQ Pairs)
 # ----------------------------------------------------
 @app.get("/create", response_class=HTMLResponse)
 @app.get("/edit/{admin_id}", response_class=HTMLResponse)
 async def edit_admin_page(admin_id: Optional[int] = None):
     admin_data = {
-        "id": "", "name": "", "company": "", "channels": [], 
+        "id": "", "name": "", "company": "", "gender": "ครับ", "channels": [], 
         "keywords": "ลดราคา, ขอราคาพิเศษ, คุยกับคน, นัดดูหน้างาน", 
-        "system_prompt": "คุณคือแอดมิน AI อัจฉริยะ ทำหน้าที่คัดกรองข้อมูลโครงการ ติดต่อประสานงาน และเก็บสเปกความต้องการของลูกค้าอย่างเป็นระบบ", 
-        "categories": [{"cat_name": "General Knowledge", "drive_link": "", "files": []}]
+        "system_prompt": "คุณคือแอดมิน AI อัจฉริยะ ตอบคำถามกระชับ เป็นมืออาชีพ ตรงประเด็น", 
+        "categories": [{"cat_name": "General Knowledge", "drive_link": "", "files": []}],
+        "faq_pairs": [{"trigger": "ขอเรทราคา", "answer": "สวัสดีครับ ส่งเรทราคามาตรฐานให้ทางลิงก์นี้ครับ..."}]
     }
     
     if admin_id:
@@ -357,6 +369,10 @@ async def edit_admin_page(admin_id: Optional[int] = None):
         </label>
         """
 
+    gender_selected_krab = "selected" if admin_data.get("gender") == "ครับ" else ""
+    gender_selected_ka = "selected" if admin_data.get("gender") == "ค่ะ" else ""
+    gender_selected_neutral = "selected" if admin_data.get("gender") == "สุภาพ" else ""
+
     categories_html = ""
     for idx, cat in enumerate(admin_data.get('categories', [])):
         files_str = ", ".join(cat.get('files', [])) if cat.get('files') else "ยังไม่มีไฟล์แนบ"
@@ -372,6 +388,16 @@ async def edit_admin_page(admin_id: Optional[int] = None):
         </div>
         """
 
+    faq_html = ""
+    for faq in admin_data.get('faq_pairs', []):
+        faq_html += f"""
+        <div class="faq-item" style="background: #f8fafc; padding: 15px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px; display: flex; gap: 10px; align-items: center;">
+            <input type="text" name="faq_trigger" value="{faq.get('trigger', '')}" placeholder="คำที่ลูกค้าพิมพ์ เช่น ขอราคา" style="flex: 1; margin-top:0;">
+            <input type="text" name="faq_answer" value="{faq.get('answer', '')}" placeholder="คำตอบสำเร็จรูป" style="flex: 2; margin-top:0;">
+            <button type="button" onclick="this.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;">ลบ</button>
+        </div>
+        """
+
     return f"""
     <html>
         <head>
@@ -380,8 +406,8 @@ async def edit_admin_page(admin_id: Optional[int] = None):
                 body {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #f1f5f9; padding: 30px; color: #334155; }}
                 .form-box {{ max-width: 900px; margin: auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }}
                 label {{ font-weight: 600; margin-top: 20px; display: block; color: #1e293b; font-size: 14px; }}
-                input[type=text], textarea {{ width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #cbd5e1; border-radius: 8px; box-sizing: border-box; font-size: 14px; }}
-                textarea {{ height: 120px; }}
+                input[type=text], select, textarea {{ width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #cbd5e1; border-radius: 8px; box-sizing: border-box; font-size: 14px; }}
+                textarea {{ height: 100px; }}
                 .section {{ background: #f8fafc; border: 1px solid #e2e8f0; padding: 25px; border-radius: 8px; margin-top: 25px; }}
                 .btn-save {{ background: #2563eb; color: white; padding: 12px 25px; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; margin-top: 25px; font-weight: 600; }}
                 .btn-add {{ background: #0ea5e9; color: white; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 14px; margin-top: 10px; }}
@@ -404,6 +430,19 @@ async def edit_admin_page(admin_id: Optional[int] = None):
                     `;
                     container.appendChild(div);
                 }}
+
+                function addFaqField() {{
+                    const container = document.getElementById('faq-container');
+                    const div = document.createElement('div');
+                    div.className = 'faq-item';
+                    div.style = "background: #f8fafc; padding: 15px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px; display: flex; gap: 10px; align-items: center;";
+                    div.innerHTML = `
+                        <input type="text" name="faq_trigger" placeholder="คำที่ลูกค้าพิมพ์ เช่น ขอราคา" style="flex: 1; margin-top:0;">
+                        <input type="text" name="faq_answer" placeholder="คำตอบสำเร็จรูป" style="flex: 2; margin-top:0;">
+                        <button type="button" onclick="this.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;">ลบ</button>
+                    `;
+                    container.appendChild(div);
+                }}
             </script>
         </head>
         <body>
@@ -415,18 +454,37 @@ async def edit_admin_page(admin_id: Optional[int] = None):
                     <input type="text" name="name" value="{admin_data['name']}" required placeholder="เช่น Kelyfos-Admin-01">
                     <label>ชื่อบริษัท / แบรนด์</label>
                     <input type="text" name="company" value="{admin_data['company']}" required placeholder="เช่น ฟาชาดเคลีฟอส">
+                    
+                    <label>เพศ / สรรพนามลงท้ายของ AI (Gender / Tone)</label>
+                    <select name="gender">
+                        <option value="ครับ" {gender_selected_krab}>ครับ (ชาย / ทางการ)</option>
+                        <option value="ค่ะ" {gender_selected_ka}>ค่ะ (หญิง / เป็นกันเอง)</option>
+                        <option value="สุภาพ" {gender_selected_neutral}>สุภาพ / กลางๆ</option>
+                    </select>
+
                     <label>ช่องทางการเชื่อมต่อที่เลือก</label>
                     <div style="margin-top: 8px; padding: 15px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px;">
                         {channels_checkboxes}
                     </div>
                     <div class="section">
-                        <h3 style="margin-top: 0; font-size: 16px;">🤖 บุคลิกและคำสั่งพฤติกรรม AI</h3>
+                        <h3 style="margin-top: 0; font-size: 16px;">🤖 บุคลิกและคำสั่งพฤติกรรม AI (System Prompt)</h3>
                         <textarea name="system_prompt">{admin_data['system_prompt']}</textarea>
                     </div>
+                    
+                    <div class="section">
+                        <h3 style="margin-top: 0; font-size: 16px;">⚡ คลังคู่คำถาม-คำตอบยอดฮิต (Dynamic FAQ Pairs)</h3>
+                        <p style="font-size: 13px; color: #64748b; margin-top: 0;">ตั้งค่าชุดคำถามที่พบบ่อยเพื่อให้ AI ตอบตามสคริปต์นี้ทันทีโดยไม่ต้องผ่านโมเดล</p>
+                        <div id="faq-container" style="margin-top: 15px;">
+                            {faq_html}
+                        </div>
+                        <button type="button" class="btn-add" onclick="addFaqField()">+ เพิ่มคู่ FAQ</button>
+                    </div>
+
                     <div class="section">
                         <h3 style="margin-top: 0; font-size: 16px;">🚨 เงื่อนไขการส่งต่อให้ทีมงาน</h3>
                         <input type="text" name="keywords" value="{admin_data['keywords']}">
                     </div>
+                    
                     <div class="section">
                         <h3 style="margin-top: 0; font-size: 16px;">📁 คลังข้อมูลอ้างอิงและคลังสินทรัพย์</h3>
                         <div id="categories-container" style="margin-top: 15px;">
@@ -448,6 +506,7 @@ async def save_admin(
     admin_id: str = Form(""),
     name: str = Form(...),
     company: str = Form(...),
+    gender: str = Form("ครับ"),
     system_prompt: str = Form(""),
     keywords: str = Form("")
 ):
@@ -456,6 +515,8 @@ async def save_admin(
     cat_names = form_data.getlist("cat_name")
     cat_links = form_data.getlist("cat_link")
     cat_files = form_data.getlist("cat_file")
+    faq_triggers = form_data.getlist("faq_trigger")
+    faq_answers = form_data.getlist("faq_answer")
 
     categories_list = []
     for i, c_name in enumerate(cat_names):
@@ -473,16 +534,24 @@ async def save_admin(
                 files_collected.append(uploaded_file.filename)
         categories_list.append({"cat_name": c_name, "drive_link": c_link, "files": files_collected})
 
+    faq_list = []
+    for i, trig in enumerate(faq_triggers):
+        if trig.strip():
+            ans = faq_answers[i] if i < len(faq_answers) else ""
+            faq_list.append({"trigger": trig.strip(), "answer": ans.strip()})
+
     saved_admin_obj = None
     if admin_id and admin_id.isdigit():
         for a in ADMINS_DB:
             if a["id"] == int(admin_id):
                 a["name"] = name
                 a["company"] = company
+                a["gender"] = gender
                 a["channels"] = selected_channels
                 a["system_prompt"] = system_prompt
                 a["keywords"] = keywords
                 a["categories"] = categories_list
+                a["faq_pairs"] = faq_list
                 saved_admin_obj = a
                 break
     else:
@@ -490,8 +559,9 @@ async def save_admin(
         new_id = max_id + 1
         saved_admin_obj = {
             "id": new_id, "name": name, "company": company, "status": "คล่องแคล่ว",
-            "channels": selected_channels, "keywords": keywords, "system_prompt": system_prompt,
-            "categories": categories_list, "pending_count": 0
+            "gender": gender, "channels": selected_channels, "keywords": keywords, 
+            "system_prompt": system_prompt, "categories": categories_list, 
+            "faq_pairs": faq_list, "pending_count": 0
         }
         ADMINS_DB.append(saved_admin_obj)
         CHAT_SESSIONS_DB[new_id] = []
@@ -503,7 +573,7 @@ async def save_admin(
 
 
 # ----------------------------------------------------
-# 3. API ส่งข้อความและบันทึกลง Google Sheets ทันที (ดึง Profile ครบชุดมาวิเคราะห์)
+# 3. API ส่งข้อความและบันทึกลง Google Sheets ทันที
 # ----------------------------------------------------
 @app.post("/chat/{admin_id}/send")
 async def send_chat_message(
@@ -518,7 +588,8 @@ async def send_chat_message(
     if not admin_info:
         admin_info = {
             "id": admin_id, "name": "AI Admin", "company": "Kelyfos", 
-            "channels": [], "keywords": "", "system_prompt": "คุณคือแอดมิน AI", "categories": []
+            "gender": "ครับ", "channels": [], "keywords": "", 
+            "system_prompt": "คุณคือแอดมิน AI", "categories": [], "faq_pairs": []
         }
 
     knowledge_context = ""
@@ -544,7 +615,6 @@ async def send_chat_message(
                 if admin["id"] == admin_id:
                     admin["pending_count"] = admin.get("pending_count", 0) + 1
         else:
-            # เรียกใช้งาน AI โดยส่ง admin_info ทั้งชุดไปวิเคราะห์
             ai_response_text = call_gemini_ai(admin_info, knowledge_context, message_text)
             ai_tag = "🤖 AI วิเคราะห์และตอบอัตโนมัติ"
 
@@ -560,7 +630,7 @@ async def send_chat_message(
 
 
 # ----------------------------------------------------
-# 4. Facebook Messenger Webhook Handlers (รับ-ส่งข้อความอัตโนมัติจาก FB)
+# 4. Facebook Messenger Webhook Handlers
 # ----------------------------------------------------
 @app.get("/webhook")
 async def verify_facebook_webhook(
@@ -568,47 +638,39 @@ async def verify_facebook_webhook(
     token: str = Query(None, alias="hub.verify_token"),
     challenge: str = Query(None, alias="hub.challenge")
 ):
-    """ใช้สำหรับให้ Facebook ยืนยันตัวตน Webhook ตอนตั้งค่า"""
     if mode == "subscribe" and token == FB_VERIFY_TOKEN:
         return PlainTextResponse(challenge)
     raise HTTPException(status_code=403, detail="Verification token mismatch")
 
 @app.post("/webhook")
 async def receive_facebook_webhook(request: Request):
-    """รับข้อความจากลูกค้าที่ทักเข้ามาทาง Facebook Messenger อัตโนมัติ"""
     body = await request.json()
     
     if body.get("object") == "page":
         for entry in body.get("entry", []):
             for messaging in entry.get("messaging", []):
-                sender_id = messaging.get("sender", {}).get("id") # Customer ID ของ Facebook
+                sender_id = messaging.get("sender", {}).get("id")
                 message_text = messaging.get("message", {}).get("text")
                 
                 if sender_id and message_text:
-                    # ผูกกับ Admin คนแรกในระบบ
                     target_admin_id = ADMINS_DB[0]["id"] if ADMINS_DB else 1
                     admin_info = next((a for a in ADMINS_DB if a["id"] == target_admin_id), None)
                     
                     if not admin_info:
                         admin_info = {
                             "id": 1, "name": "AI Admin", "company": "Kelyfos", 
-                            "channels": [], "keywords": "", "system_prompt": "คุณคือแอดมิน AI", "categories": []
+                            "gender": "ครับ", "channels": [], "keywords": "", 
+                            "system_prompt": "คุณคือแอดมิน AI", "categories": [], "faq_pairs": []
                         }
 
                     knowledge_context = ""
                     if "categories" in admin_info:
                         knowledge_context = "\n".join([f"- หมวด {cat['cat_name']}: {cat['drive_link']}" for cat in admin_info["categories"]])
 
-                    # 1. บันทึกข้อความขาเข้าลง Google Sheets
                     save_chat_to_google_sheet(sender_id, f"FB-User-{sender_id[-4:]}", message_text, "Client (ลูกค้า)")
-
-                    # 2. ให้ Gemini AI ประมวลผลคำตอบ (ใช้ Profile เต็มรูปแบบ)
                     ai_response_text = call_gemini_ai(admin_info, knowledge_context, message_text)
-
-                    # 3. บันทึกคำตอบของ AI ลง Google Sheets
                     save_chat_to_google_sheet(sender_id, f"FB-User-{sender_id[-4:]}", ai_response_text, "AI Agent")
 
-                    # 4. ส่งข้อความกลับหาลูกค้าผ่าน Facebook Graph API
                     if FB_PAGE_ACCESS_TOKEN and FB_PAGE_ACCESS_TOKEN != "ใส่_Page_Access_Token_ของ Facebook_ที่นี่":
                         url = f"https://graph.facebook.com/v18.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
                         payload = {
@@ -621,7 +683,7 @@ async def receive_facebook_webhook(request: Request):
 
 
 # ----------------------------------------------------
-# 5. Live Chat Monitor UI
+# 5. Live Chat Monitor UI (Reverse Chat Order: ล่าสุดขึ้นบนสุด)
 # ----------------------------------------------------
 @app.get("/chat/{admin_id}", response_class=HTMLResponse)
 async def chat_monitor(admin_id: int, customer: Optional[str] = None):
@@ -647,7 +709,7 @@ async def chat_monitor(admin_id: int, customer: Optional[str] = None):
             </a>
             """
             if s["customer_id"] == customer:
-                selected_logs = s["logs"]
+                selected_logs = s["logs"] # logs ถูกเรียงใหม่ให้ข้อความล่าสุดอยู่บนสุดแล้วจาก load_data
                 current_customer_name = s["customer_name"]
     else:
         customer_buttons = "<p style='color: #64748b; font-size: 13px;'>ยังไม่มีประวัติลูกค้าใน Google Sheets</p>"
@@ -695,7 +757,7 @@ async def chat_monitor(admin_id: int, customer: Optional[str] = None):
                 </div>
 
                 <div style="display: flex; gap: 10px;">
-                    <input type="text" name="message_text" placeholder="พิมพ์ข้อความที่ลูกค้าส่งมา เช่น สนใจฟาซาด หรือ ขอส่วนลด..." required style="flex-grow: 1; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px;">
+                    <input type="text" name="message_text" placeholder="พิมพ์ข้อความที่ลูกค้าส่งมา..." required style="flex-grow: 1; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px;">
                     <button type="submit" style="background: #10b981; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; white-space: nowrap;">ส่งข้อความ</button>
                 </div>
             </form>
@@ -722,8 +784,7 @@ async def chat_monitor(admin_id: int, customer: Optional[str] = None):
         <body>
             <div class="container">
                 <a href="/" class="back-link">← กลับสู่หน้าหลัก</a>
-                <h2 style="color: #0f172a; margin-top: 0; font-size: 24px;">💬 ตรวจสอบการสนทนาเชื่อมต่อ Gemini AI & Google Sheets: {admin_name}</h2>
-                <p style="color: #64748b; font-size: 14px; margin-bottom: 25px;">ระบบ AI วิเคราะห์และตอบคำถามอัตโนมัติ พร้อมซิงก์ข้อมูลลง Google Sheets ของคุณทันที</p>
+                <h2 style="color: #0f172a; margin-top: 0; font-size: 24px;">💬 ตรวจสอบการสนทนา (ล่าสุดขึ้นบนสุด): {admin_name}</h2>
                 
                 <div class="layout">
                     <div class="sidebar">
