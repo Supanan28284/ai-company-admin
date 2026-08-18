@@ -21,7 +21,6 @@ if GEMINI_API_KEY and GEMINI_API_KEY != "ใส่_API_KEY_ของคุณท
 
 GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzINU5Sgd9OwT5XI2VpgP04YZCDBr2jPXT1k9VzWpdrXq5i_LILDOW_JohOIqVW6b_t/exec"
 
-# ค่า Token สำหรับตั้งค่า Webhook บน Facebook Developers
 FB_VERIFY_TOKEN = "kelyfos_verify_token_secure"
 FB_PAGE_ACCESS_TOKEN = "ใส่_Page_Access_Token_ของ Facebook_ที่นี่"
 
@@ -35,11 +34,7 @@ ADMINS_DB = []
 CHAT_SESSIONS_DB = {}
 
 
-# ----------------------------------------------------
-# 📥 ฟังก์ชันเชื่อมต่อ Google Sheets (ดึงและบันทึก)
-# ----------------------------------------------------
 def load_data_from_google_sheets():
-    """ดึงข้อมูล Admin และประวัติแชทจาก Google Sheets มาใส่ใน RAM"""
     global ADMINS_DB, CHAT_SESSIONS_DB
     try:
         resp_admin = requests.get(GAS_WEB_APP_URL, params={"action": "get_admins"})
@@ -129,7 +124,6 @@ def load_data_from_google_sheets():
             for a_key, customers in temp_chats.items():
                 if a_key not in CHAT_SESSIONS_DB:
                     CHAT_SESSIONS_DB[a_key] = []
-                # สลับลำดับให้ข้อความล่าสุดขึ้นก่อนในระดับเซสชันแชท
                 for cust_id, cust_data in customers.items():
                     cust_data["logs"] = list(reversed(cust_data["logs"]))
                 CHAT_SESSIONS_DB[a_key] = list(customers.values())
@@ -188,19 +182,21 @@ def delete_admin_from_sheet(admin_id):
         print(f"Error deleting admin from Google Sheet: {e}")
 
 
-# ----------------------------------------------------
-# 🧠 ฟังก์ชันเรียกใช้งาน Gemini AI (ปรับปรุงโทนเสียงกระชับ + FAQ Matching + Gender)
-# ----------------------------------------------------
 def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: str) -> str:
-    # ตรวจสอบ Dynamic FAQ Pairs ก่อนส่งให้ Gemini หากมีคำถามตรงกับคลังสคริปต์
+    # ตรวจสอบ FAQ Matching (รองรับทั้งข้อความและแนบรูปภาพ)
     faq_pairs = admin_info.get("faq_pairs", [])
     for faq in faq_pairs:
         trigger = faq.get("trigger", "").strip()
         answer = faq.get("answer", "").strip()
+        image_url = faq.get("image_url", "").strip()
+        
         if trigger and trigger.lower() in customer_message.lower():
-            return answer
+            response_result = answer
+            if image_url:
+                response_result += f"\n[รูปภาพประกอบ: {image_url}]"
+            return response_result
 
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "ใส่_API_KEY_克的ที่นี่":
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "ใส่_API_KEY_ของคุณที่นี่":
         return f"[จำลอง AI]: ได้รับข้อความ '{customer_message}' แล้ว (กรุณาตรวจสอบ Gemini API Key)"
     
     try:
@@ -235,9 +231,6 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
         return f"เกิดข้อผิดพลาดในการเชื่อมต่อ AI: {str(e)}"
 
 
-# ----------------------------------------------------
-# 1. Main Dashboard
-# ----------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def main_dashboard(request: Request):
     load_data_from_google_sheets()
@@ -300,14 +293,14 @@ async def main_dashboard(request: Request):
         <body>
             <div class="container">
                 <div class="header">
-                    <h2>🤖 ศูนย์ควบคุม AI สำหรับผู้ดูแลระบบ (Enterprise AI Management)</h2>
+                    <h2>🤖 ศูนย์ควบคุม AI สำหรับผู้ดูแลระบบ</h2>
                     <a href="/create" class="btn-create">+ สร้าง AI สำหรับผู้ดูแลระบบ</a>
                 </div>
                 <div class="panel">
                     <h3 style="margin-top: 0; color: #1e293b; font-size: 16px; margin-bottom: 15px;">🔗 ช่องทางการเชื่อมต่อ</h3>
                     {channels_html}
                 </div>
-                <h3>ตัวแทน AI ที่ทำงานอยู่และคิวการส่งต่อ (เชื่อมต่อ Google Sheets)</h3>
+                <h3>ตัวแทน AI ที่ทำงานอยู่และคิวการส่งต่อ</h3>
                 <table>
                     <thead>
                         <tr>
@@ -338,9 +331,6 @@ async def delete_admin(admin_id: int):
     return RedirectResponse(url="/", status_code=303)
 
 
-# ----------------------------------------------------
-# 2. Config Form & Save API (รองรับเพศ & FAQ Pairs)
-# ----------------------------------------------------
 @app.get("/create", response_class=HTMLResponse)
 @app.get("/edit/{admin_id}", response_class=HTMLResponse)
 async def edit_admin_page(admin_id: Optional[int] = None):
@@ -349,7 +339,7 @@ async def edit_admin_page(admin_id: Optional[int] = None):
         "keywords": "ลดราคา, ขอราคาพิเศษ, คุยกับคน, นัดดูหน้างาน", 
         "system_prompt": "คุณคือแอดมิน AI อัจฉริยะ ตอบคำถามกระชับ เป็นมืออาชีพ ตรงประเด็น", 
         "categories": [{"cat_name": "General Knowledge", "drive_link": "", "files": []}],
-        "faq_pairs": [{"trigger": "ขอเรทราคา", "answer": "สวัสดีครับ ส่งเรทราคามาตรฐานให้ทางลิงก์นี้ครับ..."}]
+        "faq_pairs": [{"trigger": "ขอเรทราคา", "answer": "สวัสดีครับ ส่งเรทราคามาตรฐานให้ครับ", "image_url": "https://example.com/image.jpg"}]
     }
     
     if admin_id:
@@ -391,10 +381,15 @@ async def edit_admin_page(admin_id: Optional[int] = None):
     faq_html = ""
     for faq in admin_data.get('faq_pairs', []):
         faq_html += f"""
-        <div class="faq-item" style="background: #f8fafc; padding: 15px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px; display: flex; gap: 10px; align-items: center;">
-            <input type="text" name="faq_trigger" value="{faq.get('trigger', '')}" placeholder="คำที่ลูกค้าพิมพ์ เช่น ขอราคา" style="flex: 1; margin-top:0;">
-            <input type="text" name="faq_answer" value="{faq.get('answer', '')}" placeholder="คำตอบสำเร็จรูป" style="flex: 2; margin-top:0;">
-            <button type="button" onclick="this.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;">ลบ</button>
+        <div class="faq-item" style="background: #f8fafc; padding: 15px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px;">
+            <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+                <input type="text" name="faq_trigger" value="{faq.get('trigger', '')}" placeholder="คำที่ลูกค้าพิมพ์ เช่น ขอราคา" style="flex: 1; margin-top:0;">
+                <input type="text" name="faq_answer" value="{faq.get('answer', '')}" placeholder="คำตอบข้อความสำเร็จรูป" style="flex: 2; margin-top:0;">
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <input type="text" name="faq_image" value="{faq.get('image_url', '')}" placeholder="🖼️ URL ลิงก์รูปภาพประกอบ (ไม่ใส่ก็ได้ เช่น https://.../pic.jpg)" style="flex: 1; margin-top:0; font-size: 13px;">
+                <button type="button" onclick="this.parentElement.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap;">ลบแถวนี้</button>
+            </div>
         </div>
         """
 
@@ -435,11 +430,16 @@ async def edit_admin_page(admin_id: Optional[int] = None):
                     const container = document.getElementById('faq-container');
                     const div = document.createElement('div');
                     div.className = 'faq-item';
-                    div.style = "background: #f8fafc; padding: 15px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px; display: flex; gap: 10px; align-items: center;";
+                    div.style = "background: #f8fafc; padding: 15px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px;";
                     div.innerHTML = `
-                        <input type="text" name="faq_trigger" placeholder="คำที่ลูกค้าพิมพ์ เช่น ขอราคา" style="flex: 1; margin-top:0;">
-                        <input type="text" name="faq_answer" placeholder="คำตอบสำเร็จรูป" style="flex: 2; margin-top:0;">
-                        <button type="button" onclick="this.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;">ลบ</button>
+                        <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+                            <input type="text" name="faq_trigger" placeholder="คำที่ลูกค้าพิมพ์ เช่น ขอราคา" style="flex: 1; margin-top:0;">
+                            <input type="text" name="faq_answer" placeholder="คำตอบข้อความสำเร็จรูป" style="flex: 2; margin-top:0;">
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="text" name="faq_image" placeholder="🖼️ URL ลิงก์รูปภาพประกอบ (ไม่ใส่ก็ได้ เช่น https://.../pic.jpg)" style="flex: 1; margin-top:0; font-size: 13px;">
+                            <button type="button" onclick="this.parentElement.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap;">ลบแถวนี้</button>
+                        </div>
                     `;
                     container.appendChild(div);
                 }}
@@ -472,12 +472,12 @@ async def edit_admin_page(admin_id: Optional[int] = None):
                     </div>
                     
                     <div class="section">
-                        <h3 style="margin-top: 0; font-size: 16px;">⚡ คลังคู่คำถาม-คำตอบยอดฮิต (Dynamic FAQ Pairs)</h3>
-                        <p style="font-size: 13px; color: #64748b; margin-top: 0;">ตั้งค่าชุดคำถามที่พบบ่อยเพื่อให้ AI ตอบตามสคริปต์นี้ทันทีโดยไม่ต้องผ่านโมเดล</p>
+                        <h3 style="margin-top: 0; font-size: 16px;">⚡ คลังคู่คำถาม-คำตอบยอดฮิต (Dynamic FAQ Pairs รองรับส่งรูปภาพ)</h3>
+                        <p style="font-size: 13px; color: #64748b; margin-top: 0;">ตั้งค่าคำถามพร้อมข้อความและลิงก์รูปภาพเพื่อส่งให้ลูกค้าอัตโนมัติ</p>
                         <div id="faq-container" style="margin-top: 15px;">
                             {faq_html}
                         </div>
-                        <button type="button" class="btn-add" onclick="addFaqField()">+ เพิ่มคู่ FAQ</button>
+                        <button type="button" class="btn-add" onclick="addFaqField()">+ เพิ่มคู่ FAQ พร้อมรูปภาพ</button>
                     </div>
 
                     <div class="section">
@@ -517,6 +517,7 @@ async def save_admin(
     cat_files = form_data.getlist("cat_file")
     faq_triggers = form_data.getlist("faq_trigger")
     faq_answers = form_data.getlist("faq_answer")
+    faq_images = form_data.getlist("faq_image")
 
     categories_list = []
     for i, c_name in enumerate(cat_names):
@@ -538,7 +539,8 @@ async def save_admin(
     for i, trig in enumerate(faq_triggers):
         if trig.strip():
             ans = faq_answers[i] if i < len(faq_answers) else ""
-            faq_list.append({"trigger": trig.strip(), "answer": ans.strip()})
+            img = faq_images[i] if i < len(faq_images) else ""
+            faq_list.append({"trigger": trig.strip(), "answer": ans.strip(), "image_url": img.strip()})
 
     saved_admin_obj = None
     if admin_id and admin_id.isdigit():
@@ -572,9 +574,6 @@ async def save_admin(
     return RedirectResponse(url="/", status_code=303)
 
 
-# ----------------------------------------------------
-# 3. API ส่งข้อความและบันทึกลง Google Sheets ทันที
-# ----------------------------------------------------
 @app.post("/chat/{admin_id}/send")
 async def send_chat_message(
     admin_id: int,
@@ -629,9 +628,6 @@ async def send_chat_message(
     return RedirectResponse(url=f"/chat/{admin_id}?customer={customer_id}", status_code=303)
 
 
-# ----------------------------------------------------
-# 4. Facebook Messenger Webhook Handlers
-# ----------------------------------------------------
 @app.get("/webhook")
 async def verify_facebook_webhook(
     mode: str = Query(None, alias="hub.mode"),
@@ -682,9 +678,6 @@ async def receive_facebook_webhook(request: Request):
     return {"status": "EVENT_RECEIVED"}
 
 
-# ----------------------------------------------------
-# 5. Live Chat Monitor UI (Reverse Chat Order: ล่าสุดขึ้นบนสุด)
-# ----------------------------------------------------
 @app.get("/chat/{admin_id}", response_class=HTMLResponse)
 async def chat_monitor(admin_id: int, customer: Optional[str] = None):
     load_data_from_google_sheets()
@@ -709,7 +702,7 @@ async def chat_monitor(admin_id: int, customer: Optional[str] = None):
             </a>
             """
             if s["customer_id"] == customer:
-                selected_logs = s["logs"] # logs ถูกเรียงใหม่ให้ข้อความล่าสุดอยู่บนสุดแล้วจาก load_data
+                selected_logs = s["logs"]
                 current_customer_name = s["customer_name"]
     else:
         customer_buttons = "<p style='color: #64748b; font-size: 13px;'>ยังไม่มีประวัติลูกค้าใน Google Sheets</p>"
@@ -784,7 +777,7 @@ async def chat_monitor(admin_id: int, customer: Optional[str] = None):
         <body>
             <div class="container">
                 <a href="/" class="back-link">← กลับสู่หน้าหลัก</a>
-                <h2 style="color: #0f172a; margin-top: 0; font-size: 24px;">💬 ตรวจสอบการสนทนา (ล่าสุดขึ้นบนสุด): {admin_name}</h2>
+                <h2 style="color: #0f172a; margin-top: 0; font-size: 24px;">💬 ตรวจสอบการสนทนา: {admin_name}</h2>
                 
                 <div class="layout">
                     <div class="sidebar">
