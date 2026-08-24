@@ -8,6 +8,15 @@ import google.generativeai as genai
 import requests
 
 app = FastAPI()
+from auth import (
+    auth_router,
+    get_current_employee,
+    auth_guard,
+    ROLES,
+    PAGE_PERMISSIONS,
+)
+
+app.include_router(auth_router)
 
 UPLOAD_DIR = "./uploaded_knowledge"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
