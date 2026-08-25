@@ -254,6 +254,12 @@ def load_data_from_google_sheets():
                 keywords = str(row[4]) if len(row) > 4 else "ลดราคา, ขอราคาพิเศษ"
                 system_prompt = str(row[5]) if len(row) > 5 else "คุณคือแอดมิน AI อัจฉริยะ ตอบกระชับ เป็นมืออาชีพ"
                 gender = str(row[6]) if len(row) > 6 and str(row[6]).strip() else "ครับ"
+                
+                # ฟิลด์ข้อมูลที่ต้องการให้ AI รวบรวมจากลูกค้า และข้อมูลเฉพาะ Designer
+                required_data_fields = str(row[7]) if len(row) > 7 and str(row[7]).strip() else "ขนาดพื้นที่, รูปภาพหน้างาน, เบอร์โทรติดต่อ"
+                design_style = str(row[8]) if len(row) > 8 and str(row[8]).strip() else "Modern Luxury, Parametric Design"
+                material_specs = str(row[9]) if len(row) > 9 and str(row[9]).strip() else "แผงอลูมิเนียมคอมโพสิต ACP, โครงเหล็กมาตรฐาน"
+                portfolio_link = str(row[10]) if len(row) > 10 and str(row[10]).strip() else ""
 
                 loaded_admins.append({
                     "id": a_id,
@@ -264,6 +270,10 @@ def load_data_from_google_sheets():
                     "channels": [c.strip() for c in channels_raw.replace("[", "").replace("]", "").replace("'", "").split(",") if c.strip()],
                     "keywords": keywords,
                     "system_prompt": system_prompt,
+                    "required_data_fields": required_data_fields,
+                    "design_style": design_style,
+                    "material_specs": material_specs,
+                    "portfolio_link": portfolio_link,
                     "categories": [],
                     "faq_pairs": [],
                     "pending_count": 0
@@ -360,7 +370,11 @@ def sync_admin_to_sheet(admin_data):
         "gender": admin_data.get("gender", "ครับ"),
         "channels": str(admin_data["channels"]),
         "keywords": admin_data["keywords"],
-        "system_prompt": admin_data["system_prompt"]
+        "system_prompt": admin_data["system_prompt"],
+        "required_data_fields": admin_data.get("required_data_fields", ""),
+        "design_style": admin_data.get("design_style", ""),
+        "material_specs": admin_data.get("material_specs", ""),
+        "portfolio_link": admin_data.get("portfolio_link", "")
     }
     try:
         requests.post(GAS_WEB_APP_URL, json=payload)
@@ -399,12 +413,32 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
 
     try:
         gender_term = admin_info.get('gender', 'ครับ')
-        role_title = AI_ROLES.get(admin_info.get('ai_role'), {}).get('name', 'พนักงาน AI')
+        role_key = admin_info.get('ai_role', 'admin')
+        role_title = AI_ROLES.get(role_key, {}).get('name', 'พนักงาน AI')
+        required_fields = admin_info.get('required_data_fields', 'ขนาดพื้นที่, รูปภาพ, เบอร์โทร')
+
+        # คำสั่งเฉพาะทางตาม Role เช่น Designer เสนอ 4 แบบ และใช้วัสดุบริษัท
+        role_specific_instruction = ""
+        if role_key == "designer":
+            role_specific_instruction = f"""
+            [คำสั่งเฉพาะตำแหน่ง AI Designer (นักออกแบบ)]:
+            - คุณคือนักออกแบบมืออาชีพของบริษัท Kelyfos Facade
+            - หน้าที่: รับช่วงต่อข้อมูลจาก Admin, นำเสนอแบบตกแต่งอาคารเสมือนจริง หากลูกค้ายังไม่มีแบบในใจ ให้เสนอแนวทางตัวอย่าง 4 แบบให้เลือก
+            - วัสดุและสเปกมาตรฐานของบริษัทที่ต้องใช้อ้างอิง: {admin_info.get('material_specs', 'แผงอลูมิเนียมคอมโพสิต ACP, โครงเหล็กมาตรฐาน')}
+            - สไตล์การออกแบบหลัก: {admin_info.get('design_style', 'Modern Luxury, Parametric Design')}
+            - รับคำติชมและแก้ไขแบบจนกว่าลูกค้าพอใจ พร้อมแจ้งเตือนเงื่อนไขเสมอว่า: "แบบทั้งหมดจะต้องถูกส่งให้ทีมงานจริงตรวจสอบยืนยันก่อนส่งมอบให้ลูกค้าทุกครั้ง"
+            """
+
         profile_instruction = f"""
         [ตำแหน่งและหน้าที่พนักงาน AI]: {role_title}
         - ชื่อตัวแทน/ผู้ดูแล: {admin_info.get('name', 'Admin')}
         - บริษัท/แบรนด์: Kelyfos Facade
         - สรรพนามลงท้าย/เพศการพูดคุย: ลงท้ายด้วย '{gender_term}'
+
+        [เป้าหมายการรวบรวมข้อมูลจากลูกค้า]:
+        {required_fields}
+
+        {role_specific_instruction}
 
         [คำสั่งพฤติกรรมและบุคลิก (System Prompt)]:
         {admin_info.get('system_prompt', 'คุณคือแอดมิน AI อัจฉริยะ ตอบกระชับ ชัดเจน ตรงประเด็น เป็นมืออาชีพ')}
@@ -697,7 +731,7 @@ async def employee_delete(request: Request, employee_id: int):
 
 
 # ======================================================
-# ===============  หน้า Dashboard หลัก (เปลี่ยนหัวข้อเป็นตำแหน่ง)  ==
+# ===============  หน้า Dashboard หลัก  =================
 # ======================================================
 
 @app.get("/", response_class=HTMLResponse)
@@ -883,8 +917,12 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
         "id": "", "name": "", "ai_role": role, "gender": "ครับ", "channels": [],
         "keywords": "ลดราคา, ขอราคาพิเศษ, คุยกับคน, นัดดูหน้างาน",
         "system_prompt": "คุณคือแอดมิน AI อัจฉริยะ ตอบคำถามกระชับ เป็นมืออาชีพ ตรงประเด็น",
+        "required_data_fields": "ขนาดพื้นที่, รูปภาพหน้างาน, เบอร์โทรติดต่อลูกค้า",
+        "design_style": "Modern Luxury, Parametric Design",
+        "material_specs": "แผงอลูมิเนียมคอมโพสิต ACP, โครงเหล็กมาตรฐาน",
+        "portfolio_link": "",
         "categories": [{"cat_name": "General Knowledge", "drive_link": "", "files": []}],
-        "faq_pairs": [{"trigger": "ขอเรทราคา", "answer": "สวัสดีครับ ส่งเรทราคามาตรฐานให้ครับ", "image_url": "https://example.com/image.jpg"}]
+        "faq_pairs": [{"trigger": "ขอเรทราคา", "answer": "สวัสดีครับ ส่งเรทราคามาตรฐานให้ครับ", "image_url": ""}]
     }
 
     if admin_id:
@@ -896,6 +934,19 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
 
     role_title = AI_ROLES.get(role, {}).get("name", "พนักงาน AI")
     title = f"⚙️ ตั้งค่าพนักงาน [{role_title}]: {admin_data['name']}" if admin_id else f"➕ สร้างพนักงานใหม่: {role_title}"
+
+    # ฟิลด์เฉพาะสำหรับ Designer
+    role_specific_fields_html = ""
+    if role == "designer":
+        role_specific_fields_html = f"""
+        <div style="background:#fdf4ff; border:1px solid #f5d0fe; padding:20px; border-radius:8px; margin-top:20px;">
+            <label style="font-weight:600; color:#86198f; margin-top:0; display:block;">🎨 ข้อมูลเฉพาะทางสำหรับ AI Designer (นักออกแบบ)</label>
+            <p style="font-size:13px; color:#a21caf; margin-top:4px; margin-bottom:10px;">ระบุสไตล์หลัก วัสดุมาตรฐาน และลิงก์พอร์ตโฟลิโอ เพื่อให้ AI ใช้เสนอแบบ 4 รูปแบบตามสเปกบริษัท</p>
+            <input type="text" name="design_style" value="{admin_data.get('design_style', '')}" placeholder="สไตล์การออกแบบ (เช่น Modern Luxury, Minimalist, Parametric)" style="width:100%; padding:10px; margin-bottom:10px; border:1px solid #f0abfc; border-radius:6px; background:white;">
+            <input type="text" name="material_specs" value="{admin_data.get('material_specs', '')}" placeholder="วัสดุหลัก/สเปก (เช่น แผง ACP ความหนา 4 มม. สี PVDF, โครงเหล็กมาตรฐาน)" style="width:100%; padding:10px; margin-bottom:10px; border:1px solid #f0abfc; border-radius:6px; background:white;">
+            <input type="text" name="portfolio_link" value="{admin_data.get('portfolio_link', '')}" placeholder="ลิงก์คลังรูปภาพ / ตัวอย่างผลงาน (Google Drive Portfolio)" style="width:100%; padding:10px; border:1px solid #f0abfc; border-radius:6px; background:white;">
+        </div>
+        """
 
     channels_checkboxes = ""
     for ch in CONNECTED_CHANNELS:
@@ -934,7 +985,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
                 <input type="text" name="faq_answer" value="{faq.get('answer', '')}" placeholder="คำตอบข้อความสำเร็จรูป" style="flex: 2; margin-top:0;">
             </div>
             <div style="display: flex; gap: 10px; align-items: center;">
-                <input type="text" name="faq_image" value="{faq.get('image_url', '')}" placeholder="🖼️ URL ลิงก์รูปภาพประกอบ (ไม่ใส่ก็ได้ เช่น https://.../pic.jpg)" style="flex: 1; margin-top:0; font-size: 13px;">
+                <input type="text" name="faq_image" value="{faq.get('image_url', '')}" placeholder="🖼️ URL ลิงก์รูปภาพประกอบ (ไม่ใส่ก็ได้)" style="flex: 1; margin-top:0; font-size: 13px;">
                 <button type="button" onclick="this.parentElement.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap;">ลบแถวนี้</button>
             </div>
         </div>
@@ -984,7 +1035,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
                             <input type="text" name="faq_answer" placeholder="คำตอบข้อความสำเร็จรูป" style="flex: 2; margin-top:0;">
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="text" name="faq_image" placeholder="🖼️ URL ลิงก์รูปภาพประกอบ (ไม่ใส่ก็ได้ เช่น https://.../pic.jpg)" style="flex: 1; margin-top:0; font-size: 13px;">
+                            <input type="text" name="faq_image" placeholder="🖼️ URL ลิงก์รูปภาพประกอบ (ไม่ใส่ก็ได้)" style="flex: 1; margin-top:0; font-size: 13px;">
                             <button type="button" onclick="this.parentElement.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap;">ลบแถวนี้</button>
                         </div>
                     `;
@@ -1000,7 +1051,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
                     <input type="hidden" name="ai_role" value="{role}">
                     
                     <label>ชื่อพนักงาน AI</label>
-                    <input type="text" name="name" value="{admin_data['name']}" required placeholder="เช่น AI ฝ่ายขาย 01">
+                    <input type="text" name="name" value="{admin_data['name']}" required placeholder="เช่น AI แอดมินฝ่ายขาย 01">
                     
                     <label>เพศ / สรรพนามลงท้ายของ AI (Gender / Tone)</label>
                     <select name="gender">
@@ -1008,6 +1059,14 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
                         <option value="ค่ะ" {gender_selected_ka}>ค่ะ (หญิง / เป็นกันเอง)</option>
                         <option value="สุภาพ" {gender_selected_neutral}>สุภาพ / กลางๆ</option>
                     </select>
+
+                    <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:20px; border-radius:8px; margin-top:20px;">
+                        <label style="font-weight:600; color:#1e40af; margin-top:0; display:block;">📋 ข้อมูลที่ต้องการให้ AI ซักถามและรวบรวมจากลูกค้า</label>
+                        <p style="font-size:13px; color:#3b82f6; margin-top:4px; margin-bottom:10px;">ระบุสิ่งที่ต้องการให้ AI เจาะถามลูกค้า เช่น ขนาดพื้นที่, รูปภาพหน้างาน, เบอร์โทรติดต่อ ฯลฯ</p>
+                        <textarea name="required_data_fields" style="width:100%; height:80px; padding:10px; border:1px solid #93c5fd; border-radius:6px; background:white;">{admin_data.get('required_data_fields', '')}</textarea>
+                    </div>
+
+                    {role_specific_fields_html}
 
                     <label>ช่องทางการเชื่อมต่อที่เลือก</label>
                     <div style="margin-top: 8px; padding: 15px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px;">
@@ -1019,8 +1078,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
                     </div>
                     
                     <div class="section">
-                        <h3 style="margin-top: 0; font-size: 16px;">⚡ คลังคู่คำถาม-คำตอบยอดฮิต (Dynamic FAQ Pairs รองรับส่งรูปภาพ)</h3>
-                        <p style="font-size: 13px; color: #64748b; margin-top: 0;">ตั้งค่าคำถามพร้อมข้อความและลิงก์รูปภาพเพื่อส่งให้ลูกค้าอัตโนมัติ</p>
+                        <h3 style="margin-top: 0; font-size: 16px;">⚡ คลังคู่คำถาม-คำตอบยอดฮิต (Dynamic FAQ Pairs)</h3>
                         <div id="faq-container" style="margin-top: 15px;">
                             {faq_html}
                         </div>
@@ -1056,7 +1114,11 @@ async def save_admin(
     ai_role: str = Form("admin"),
     gender: str = Form("ครับ"),
     system_prompt: str = Form(""),
-    keywords: str = Form("")
+    keywords: str = Form(""),
+    required_data_fields: str = Form(""),
+    design_style: str = Form(""),
+    material_specs: str = Form(""),
+    portfolio_link: str = Form("")
 ):
     guard = auth_guard(request, PAGE_PERMISSIONS["admin_settings"])
     if not isinstance(guard, dict):
@@ -1104,6 +1166,10 @@ async def save_admin(
                 a["channels"] = selected_channels
                 a["system_prompt"] = system_prompt
                 a["keywords"] = keywords
+                a["required_data_fields"] = required_data_fields
+                a["design_style"] = design_style
+                a["material_specs"] = material_specs
+                a["portfolio_link"] = portfolio_link
                 a["categories"] = categories_list
                 a["faq_pairs"] = faq_list
                 saved_admin_obj = a
@@ -1114,7 +1180,12 @@ async def save_admin(
         saved_admin_obj = {
             "id": new_id, "name": name, "ai_role": ai_role, "status": "คล่องแคล่ว",
             "gender": gender, "channels": selected_channels, "keywords": keywords, 
-            "system_prompt": system_prompt, "categories": categories_list, 
+            "system_prompt": system_prompt, 
+            "required_data_fields": required_data_fields,
+            "design_style": design_style,
+            "material_specs": material_specs,
+            "portfolio_link": portfolio_link,
+            "categories": categories_list, 
             "faq_pairs": faq_list, "pending_count": 0
         }
         ADMINS_DB.append(saved_admin_obj)
@@ -1127,8 +1198,9 @@ async def save_admin(
 
 
 # ======================================================
-# 3. API ส่งข้อความและบันทึกลง Google Sheets ทันที
+# ===============  ระบบแชทและ Webhook  =================
 # ======================================================
+
 @app.post("/chat/{admin_id}/send")
 async def send_chat_message(
     request: Request,
@@ -1169,13 +1241,11 @@ async def send_chat_message(
         needs_handover = any(kw in message_text for kw in keywords_list if kw)
         if needs_handover:
             ai_response_text = "ตรวจพบเงื่อนไขสำคัญตามคำสั่งระบบ ทำการยกธงแดงส่งต่อให้ทีมงานมืออาชีพดูแลต่อครับ"
-            ai_tag = "⚠️ Need Human Intervention"
             for admin in ADMINS_DB:
                 if admin["id"] == admin_id:
                     admin["pending_count"] = admin.get("pending_count", 0) + 1
         else:
             ai_response_text = call_gemini_ai(admin_info, knowledge_context, message_text)
-            ai_tag = "🤖 AI วิเคราะห์และตอบอัตโนมัติ"
 
         save_chat_to_google_sheet(customer_id, current_customer_name, ai_response_text, "AI Agent")
         
@@ -1188,9 +1258,6 @@ async def send_chat_message(
     return RedirectResponse(url=f"/chat/{admin_id}?customer={customer_id}", status_code=303)
 
 
-# ======================================================
-# 4. Facebook Messenger Webhook Handlers
-# ======================================================
 @app.get("/webhook")
 async def verify_facebook_webhook(
     mode: str = Query(None, alias="hub.mode"),
@@ -1200,6 +1267,7 @@ async def verify_facebook_webhook(
     if mode == "subscribe" and token == FB_VERIFY_TOKEN:
         return PlainTextResponse(challenge)
     raise HTTPException(status_code=403, detail="Verification token mismatch")
+
 
 @app.post("/webhook")
 async def receive_facebook_webhook(request: Request):
@@ -1230,7 +1298,7 @@ async def receive_facebook_webhook(request: Request):
                     ai_response_text = call_gemini_ai(admin_info, knowledge_context, message_text)
                     save_chat_to_google_sheet(sender_id, f"FB-User-{sender_id[-4:]}", ai_response_text, "AI Agent")
 
-                    if FB_PAGE_ACCESS_TOKEN and FB_PAGE_ACCESS_TOKEN != "ใส่_Page_Access_Token_ของ Facebook_ที่นี่":
+                    if FB_PAGE_ACCESS_TOKEN:
                         url = f"https://graph.facebook.com/v18.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
                         payload = {
                             "recipient": {"id": sender_id},
@@ -1241,9 +1309,6 @@ async def receive_facebook_webhook(request: Request):
     return {"status": "EVENT_RECEIVED"}
 
 
-# ======================================================
-# 5. Live Chat Monitor UI
-# ======================================================
 @app.get("/chat/{admin_id}", response_class=HTMLResponse)
 async def chat_monitor(request: Request, admin_id: int, customer: Optional[str] = None):
     guard = auth_guard(request, PAGE_PERMISSIONS["chat_monitor"])
@@ -1346,7 +1411,7 @@ async def chat_monitor(request: Request, admin_id: int, customer: Optional[str] 
         </head>
         <body>
             <div class="container">
-                <a href="/" class="back-link">← กลับสู่หน้าหลัก</a>
+                <a href="/" class="back-link">← กลับหน้าหลัก</a>
                 <h2 style="color: #0f172a; margin-top: 0; font-size: 24px;">💬 ตรวจสอบการสนทนา: {admin_name}</h2>
                 
                 <div class="layout">
