@@ -1,330 +1,155 @@
-// ============================================
-// Google Apps Script สำหรับเชื่อมต่อกับเว็บ
-// Deploy as Web App และใส่ URL ใน Environment Variables
-// ============================================
+const EMPLOYEES_SHEET_NAME = "Employees";
+
+function getEmployeesSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(EMPLOYEES_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(EMPLOYEES_SHEET_NAME);
+    sheet.appendRow(["id", "username", "password_hash", "full_name", "role", "status"]);
+  }
+  return sheet;
+}
 
 function doGet(e) {
-  return doPost(e);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var action = e.parameter.action;
+  
+  if (action === "get_employees") {
+    var sheet = ss.getSheetByName("Employees");
+    if (!sheet) {
+      sheet = ss.insertSheet("Employees");
+      sheet.appendRow(["id", "username", "password_hash", "full_name", "role", "status"]);
+    }
+    var data = sheet.getDataRange().getValues();
+    return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  if (action === "get_admins") {
+    var sheet = ss.getSheetByName("Admin_Config");
+    return ContentService.createTextOutput(JSON.stringify(sheet.getDataRange().getValues())).setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  if (action === "get_chats") {
+    var sheet = ss.getSheetByName("Customer_Chat_Logs");
+    return ContentService.createTextOutput(JSON.stringify(sheet.getDataRange().getValues())).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === "get_customers") {
+    var sheet = ss.getSheetByName("Customer_Data");
+    if (!sheet) {
+      sheet = ss.insertSheet("Customer_Data");
+      sheet.appendRow(["customer_id", "customer_name", "contact_channel", "admin_ai", "status", "project_details", "budget"]);
+    }
+    var data = sheet.getDataRange().getValues();
+    return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  return ContentService.createTextOutput(JSON.stringify({"status": "error", "message": "Invalid action"})).setMimeType(ContentService.MimeType.JSON);
 }
 
 function doPost(e) {
-  try {
-    const action = e.parameter.action || (e.postData ? JSON.parse(e.postData.contents).action : null);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var data = JSON.parse(e.postData.contents);
+  var action = data.action;
+  
+  // 1. จัดการบันทึกแชท
+  if (action === "save_chat") {
+    var sheet = ss.getSheetByName("Customer_Chat_Logs");
+    sheet.appendRow([new Date(), data.customer_id, data.customer_name, data.message, data.sender_type]);
+    return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  // 2. จัดการบันทึก Admin / AI
+  if (action === "save_admin") {
+    var sheet = ss.getSheetByName("Admin_Config");
+    var rows = sheet.getDataRange().getValues();
+    var found = false;
     
-    if (action === "get_employees") {
-      return getEmployees();
-    } else if (action === "save_employee") {
-      const data = e.postData ? JSON.parse(e.postData.contents) : e.parameter;
-      return saveEmployee(data);
-    } else if (action === "delete_employee") {
-      const data = e.postData ? JSON.parse(e.postData.contents) : e.parameter;
-      return deleteEmployee(data);
-    } else if (action === "get_admins") {
-      return getAdmins();
-    } else if (action === "save_admin") {
-      const data = e.postData ? JSON.parse(e.postData.contents) : e.parameter;
-      return saveAdmin(data);
-    } else if (action === "delete_admin") {
-      const data = e.postData ? JSON.parse(e.postData.contents) : e.parameter;
-      return deleteAdmin(data);
-    } else if (action === "get_chats") {
-      return getChats();
-    } else if (action === "save_chat") {
-      const data = e.postData ? JSON.parse(e.postData.contents) : e.parameter;
-      return saveChat(data);
-    } else if (action === "get_customers") {
-      return getCustomers();
+    if (data.admin_id !== "" && data.admin_id !== "None") {
+      for (var i = 1; i < rows.length; i++) {
+        if (rows[i][0] == data.admin_id) {
+          sheet.getRange(i + 1, 1, 1, 6).setValues([[data.admin_id, data.name, data.company, data.channels, data.keywords, data.system_prompt]]);
+          found = true;
+          break;
+        }
+      }
+    }
+    
+    if (!found) {
+      var maxId = 0;
+      for (var i = 1; i < rows.length; i++) {
+        var idVal = parseInt(rows[i][0]);
+        if (!isNaN(idVal) && idVal > maxId) {
+          maxId = idVal;
+        }
+      }
+      var nextId = maxId + 1;
+      sheet.appendRow([nextId, data.name, data.company, data.channels, data.keywords, data.system_prompt]);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 3. จัดการลบ Admin / AI
+  if (action === "delete_admin") {
+    var sheet = ss.getSheetByName("Admin_Config");
+    var rows = sheet.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++) {
+      if (rows[i][0] == data.admin_id) {
+        sheet.deleteRow(i + 1);
+        break;
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 4. จัดการบันทึกพนักงาน (Employees)
+  if (action === "save_employee") {
+    const sheet = getEmployeesSheet_();
+    const rows = sheet.getDataRange().getValues();
+    const employeeId = String(data.employee_id);
+
+    let rowIndex = -1;
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][0]) === employeeId) {
+        rowIndex = i + 1;
+        break;
+      }
+    }
+
+    const rowValues = [
+      data.employee_id,
+      data.username,
+      data.password_hash,
+      data.full_name,
+      data.role,
+      data.status,
+    ];
+
+    if (rowIndex > 0) {
+      sheet.getRange(rowIndex, 1, 1, rowValues.length).setValues([rowValues]);
     } else {
-      return ContentService.createTextOutput(JSON.stringify({error: "Unknown action"}))
-        .setMimeType(ContentService.MimeType.JSON);
+      sheet.appendRow(rowValues);
     }
-  } catch (error) {
-    Logger.log("Error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
+
+    return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
   }
-}
 
-// ============================================
-// ฟังก์ชัน EMPLOYEES (พนักงาน)
-// ============================================
+  // 5. จัดการลบพนักงาน (Employees)
+  if (action === "delete_employee") {
+    const sheet = getEmployeesSheet_();
+    const rows = sheet.getDataRange().getValues();
+    const employeeId = String(data.employee_id);
 
-function getEmployees() {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    const sheet = spreadsheet.getSheetByName("Employees");
-    
-    if (!sheet) {
-      Logger.log("Employees sheet not found, creating it...");
-      createEmployeesSheet();
-      return ContentService.createTextOutput(JSON.stringify([["ID", "Username", "Password Hash", "Full Name", "Role", "Status"]]))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    const range = sheet.getDataRange();
-    const values = range.getValues();
-    
-    return ContentService.createTextOutput(JSON.stringify(values))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log("getEmployees error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function saveEmployee(data) {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    let sheet = spreadsheet.getSheetByName("Employees");
-    
-    if (!sheet) {
-      createEmployeesSheet();
-      sheet = spreadsheet.getSheetByName("Employees");
-    }
-    
-    const employee_id = data.employee_id;
-    const username = data.username;
-    const password_hash = data.password_hash;
-    const full_name = data.full_name;
-    const role = data.role;
-    const status = data.status;
-    
-    const allValues = sheet.getDataRange().getValues();
-    let found = false;
-    
-    // ค้นหาแถวที่มี employee_id เดียวกัน และอัปเดต
-    for (let i = 1; i < allValues.length; i++) {
-      if (allValues[i][0] == employee_id) {
-        sheet.getRange(i + 1, 1, 1, 6).setValues([[employee_id, username, password_hash, full_name, role, status]]);
-        found = true;
-        break;
-      }
-    }
-    
-    // ถ้าไม่เจอ ให้เพิ่มแถวใหม่
-    if (!found) {
-      sheet.appendRow([employee_id, username, password_hash, full_name, role, status]);
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({success: true, employee_id: employee_id}))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log("saveEmployee error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function deleteEmployee(data) {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    const sheet = spreadsheet.getSheetByName("Employees");
-    
-    if (!sheet) {
-      return ContentService.createTextOutput(JSON.stringify({error: "Sheet not found"}))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    const employee_id = data.employee_id;
-    const allValues = sheet.getDataRange().getValues();
-    
-    // ค้นหาและลบแถวที่มี employee_id เดียวกัน
-    for (let i = allValues.length - 1; i >= 1; i--) {
-      if (allValues[i][0] == employee_id) {
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][0]) === employeeId) {
         sheet.deleteRow(i + 1);
         break;
       }
     }
-    
-    return ContentService.createTextOutput(JSON.stringify({success: true}))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log("deleteEmployee error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
+
+    return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
   }
-}
 
-function createEmployeesSheet() {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    const sheet = spreadsheet.insertSheet("Employees");
-    
-    // ตั้งหัวคอลัมน์
-    sheet.appendRow(["ID", "Username", "Password Hash", "Full Name", "Role", "Status"]);
-    
-    // จัดรูปแบบ
-    const headerRange = sheet.getRange(1, 1, 1, 6);
-    headerRange.setBackground("#e2e8f0");
-    headerRange.setFontWeight("bold");
-    headerRange.setFontColor("#1e293b");
-    
-    // ปรับความกว้างของคอลัมน์
-    sheet.setColumnWidth(1, 60);
-    sheet.setColumnWidth(2, 120);
-    sheet.setColumnWidth(3, 300);
-    sheet.setColumnWidth(4, 150);
-    sheet.setColumnWidth(5, 120);
-    sheet.setColumnWidth(6, 100);
-    
-    return sheet;
-  } catch (error) {
-    Logger.log("createEmployeesSheet error: " + error.toString());
-  }
-}
-
-// ============================================
-// ฟังก์ชัน ADMINS (พนักงาน AI)
-// ============================================
-
-function getAdmins() {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    const sheet = spreadsheet.getSheetByName("Admin_Config");
-    
-    const range = sheet.getDataRange();
-    const values = range.getValues();
-    
-    return ContentService.createTextOutput(JSON.stringify(values))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log("getAdmins error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function saveAdmin(data) {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    const sheet = spreadsheet.getSheetByName("Admin_Config");
-    
-    const admin_id = data.admin_id;
-    const name = data.name;
-    const company = data.company;
-    const gender = data.gender;
-    const channels = data.channels;
-    const keywords = data.keywords;
-    const system_prompt = data.system_prompt;
-    const required_data_fields = data.required_data_fields || "";
-    const design_style = data.design_style || "";
-    const material_specs = data.material_specs || "";
-    const portfolio_link = data.portfolio_link || "";
-    
-    const allValues = sheet.getDataRange().getValues();
-    let found = false;
-    
-    for (let i = 1; i < allValues.length; i++) {
-      if (allValues[i][0] == admin_id) {
-        sheet.getRange(i + 1, 1, 1, 10).setValues([[admin_id, name, company, channels, keywords, system_prompt, gender, required_data_fields, design_style, material_specs]]);
-        found = true;
-        break;
-      }
-    }
-    
-    if (!found) {
-      sheet.appendRow([admin_id, name, company, channels, keywords, system_prompt, gender, required_data_fields, design_style, material_specs]);
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({success: true, admin_id: admin_id}))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log("saveAdmin error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function deleteAdmin(data) {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    const sheet = spreadsheet.getSheetByName("Admin_Config");
-    
-    const admin_id = data.admin_id;
-    const allValues = sheet.getDataRange().getValues();
-    
-    for (let i = allValues.length - 1; i >= 1; i--) {
-      if (allValues[i][0] == admin_id) {
-        sheet.deleteRow(i + 1);
-        break;
-      }
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({success: true}))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log("deleteAdmin error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-// ============================================
-// ฟังก์ชัน CHATS (บันทึกแชท)
-// ============================================
-
-function getChats() {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    const sheet = spreadsheet.getSheetByName("Chat_Logs");
-    
-    const range = sheet.getDataRange();
-    const values = range.getValues();
-    
-    return ContentService.createTextOutput(JSON.stringify(values))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log("getChats error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function saveChat(data) {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    let sheet = spreadsheet.getSheetByName("Chat_Logs");
-    
-    if (!sheet) {
-      sheet = spreadsheet.insertSheet("Chat_Logs");
-      sheet.appendRow(["Timestamp", "Customer ID", "Customer Name", "Message", "Sender Type"]);
-    }
-    
-    const timestamp = new Date().toISOString();
-    const customer_id = data.customer_id;
-    const customer_name = data.customer_name;
-    const message = data.message;
-    const sender_type = data.sender_type;
-    
-    sheet.appendRow([timestamp, customer_id, customer_name, message, sender_type]);
-    
-    return ContentService.createTextOutput(JSON.stringify({success: true}))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log("saveChat error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-// ============================================
-// ฟังก์ชัน CUSTOMERS (ลูกค้า)
-// ============================================
-
-function getCustomers() {
-  try {
-    const spreadsheet = SpreadsheetApp.openById("1StP6PBDw7wnPyqGiz2zbvHCWDnZimG9r4zWllhjexS8");
-    const sheet = spreadsheet.getSheetByName("Customer_Data");
-    
-    const range = sheet.getDataRange();
-    const values = range.getValues();
-    
-    return ContentService.createTextOutput(JSON.stringify(values))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    Logger.log("getCustomers error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
+  return ContentService.createTextOutput(JSON.stringify({"status": "error", "message": "Invalid action"})).setMimeType(ContentService.MimeType.JSON);
 }
