@@ -392,10 +392,10 @@ def delete_admin_from_sheet(admin_id):
         print(f"Error deleting admin from Google Sheet: {e}")
 
 
-def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: str) -> str:
+def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: str, image_contents: Optional[List[bytes]] = None) -> str:
     role_key = admin_info.get("ai_role", "admin")
 
-    if role_key != "designer":
+    if role_key != "designer" and not image_contents:
         faq_pairs = admin_info.get("faq_pairs", [])
         for faq in faq_pairs:
             trigger = faq.get("trigger", "").strip()
@@ -409,7 +409,7 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
                 return response_result
 
     if not GEMINI_API_KEY:
-        return f"[จำลอง AI]: ได้รับข้อความ '{customer_message}' แล้ว (กรุณาตั้งค่า GEMINI_API_KEY ใน Environment Variables)"
+        return f"[จำลอง AI]: ได้รับข้อความ '{customer_message}' พร้อมรูปภาพ {len(image_contents) if image_contents else 0} รูปแล้ว (กรุณาตั้งค่า GEMINI_API_KEY)"
 
     try:
         gender_term = admin_info.get('gender', 'ครับ')
@@ -458,7 +458,13 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
             model_name="gemini-3.7-flash",
             system_instruction=profile_instruction
         )
-        response = model.generate_content(customer_message)
+        
+        contents = [customer_message]
+        if image_contents:
+            for img_bytes in image_contents:
+                contents.append({"mime_type": "image/jpeg", "data": img_bytes})
+
+        response = model.generate_content(contents)
         return response.text
     except Exception as e:
         return f"เกิดข้อผิดพลาดในการเชื่อมต่อ AI: {str(e)}"
@@ -903,7 +909,7 @@ async def create_role_page(request: Request):
 
 
 # ======================================================
-# ===============  หน้าฟอร์มสร้าง/ตั้งค่า AI (รองรับเลือก Role)  =
+# ===============  หน้าฟอร์มสร้าง/ตั้งค่า AI  =============
 # ======================================================
 
 @app.get("/create", response_class=HTMLResponse)
@@ -935,7 +941,6 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
     role_title = AI_ROLES.get(role, {}).get("name", "พนักงาน AI")
     title = f"⚙️ ตั้งค่าพนักงาน [{role_title}]: {admin_data['name']}" if admin_id else f"➕ สร้างพนักงานใหม่: {role_title}"
 
-    # ฟิลด์เฉพาะสำหรับ Designer (เอาช่องลิงก์คลังรูปภาพออกแล้ว)
     role_specific_fields_html = ""
     if role == "designer":
         role_specific_fields_html = f"""
@@ -1003,7 +1008,6 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
         </div>
         """
 
-    # เอาส่วนข้อมูลที่ต้องการให้ AI ซักถามออกเฉพาะ Designer
     required_data_section = ""
     if role != "designer":
         required_data_section = f"""
@@ -1224,7 +1228,8 @@ async def send_chat_message(
     admin_id: int,
     customer_id: str = Form(...),
     sender_type: str = Form(...),
-    message_text: str = Form(...)
+    message_text: str = Form(""),
+    customer_images: List[UploadFile] = File([])
 ):
     guard = auth_guard(request, PAGE_PERMISSIONS["chat_monitor"])
     if not isinstance(guard, dict):
@@ -1253,7 +1258,18 @@ async def send_chat_message(
             break
             
     if sender_type == "Client":
-        save_chat_to_google_sheet(customer_id, current_customer_name, message_text, "Client (ลูกค้า)")
+        image_bytes_list = []
+        image_info_text = ""
+        if customer_images:
+            for img in customer_images:
+                if img and img.filename:
+                    content = await img.read()
+                    if content:
+                        image_bytes_list.append(content)
+                        image_info_text += f" [แนบรูปภาพ: {img.filename}]"
+
+        full_message_text = message_text + image_info_text
+        save_chat_to_google_sheet(customer_id, current_customer_name, full_message_text, "Client (ลูกค้า)")
         
         needs_handover = any(kw in message_text for kw in keywords_list if kw)
         if needs_handover:
@@ -1262,7 +1278,7 @@ async def send_chat_message(
                 if admin["id"] == admin_id:
                     admin["pending_count"] = admin.get("pending_count", 0) + 1
         else:
-            ai_response_text = call_gemini_ai(admin_info, knowledge_context, message_text)
+            ai_response_text = call_gemini_ai(admin_info, knowledge_context, message_text, image_bytes_list)
 
         save_chat_to_google_sheet(customer_id, current_customer_name, ai_response_text, "AI Agent")
         
@@ -1294,9 +1310,26 @@ async def receive_facebook_webhook(request: Request):
         for entry in body.get("entry", []):
             for messaging in entry.get("messaging", []):
                 sender_id = messaging.get("sender", {}).get("id")
-                message_text = messaging.get("message", {}).get("text")
+                message_data = messaging.get("message", {})
+                message_text = message_data.get("text", "")
+                attachments = message_data.get("attachments", [])
                 
-                if sender_id and message_text:
+                image_bytes_list = []
+                image_info_text = ""
+                for att in attachments:
+                    if att.get("type") == "image":
+                        img_url = att.get("payload", {}).get("url")
+                        if img_url:
+                            try:
+                                img_resp = requests.get(img_url, timeout=10)
+                                if img_resp.status_code == 200:
+                                    image_bytes_list.append(img_resp.content)
+                                    image_info_text += " [แนบรูปภาพจาก Facebook]"
+                            except Exception as e:
+                                print(f"Error downloading FB image: {e}")
+
+                if sender_id and (message_text or image_bytes_list):
+                    full_incoming_text = message_text + image_info_text
                     target_admin_id = ADMINS_DB[0]["id"] if ADMINS_DB else 1
                     admin_info = next((a for a in ADMINS_DB if a["id"] == target_admin_id), None)
                     
@@ -1311,8 +1344,8 @@ async def receive_facebook_webhook(request: Request):
                     if "categories" in admin_info:
                         knowledge_context = "\n".join([f"- หมวด {cat['cat_name']}: {cat['drive_link']}" for cat in admin_info["categories"]])
 
-                    save_chat_to_google_sheet(sender_id, f"FB-User-{sender_id[-4:]}", message_text, "Client (ลูกค้า)")
-                    ai_response_text = call_gemini_ai(admin_info, knowledge_context, message_text)
+                    save_chat_to_google_sheet(sender_id, f"FB-User-{sender_id[-4:]}", full_incoming_text, "Client (ลูกค้า)")
+                    ai_response_text = call_gemini_ai(admin_info, knowledge_context, message_text, image_bytes_list)
                     save_chat_to_google_sheet(sender_id, f"FB-User-{sender_id[-4:]}", ai_response_text, "AI Agent")
 
                     if FB_PAGE_ACCESS_TOKEN:
@@ -1388,22 +1421,27 @@ async def chat_monitor(request: Request, admin_id: int, customer: Optional[str] 
     if customer:
         chat_form_html = f"""
         <div style="margin-top: 20px; background: #f8fafc; border: 1px solid #cbd5e1; padding: 20px; border-radius: 8px;">
-            <h4 style="margin-top: 0; color: #1e293b; font-size: 15px; margin-bottom: 12px;">✍️ จำลองการส่งข้อความโต้ตอบ ({current_customer_name})</h4>
-            <form action="/chat/{admin_id}/send" method="POST">
+            <h4 style="margin-top: 0; color: #1e293b; font-size: 15px; margin-bottom: 12px;">✍️ จำลองการส่งข้อความและรูปภาพโต้ตอบ ({current_customer_name})</h4>
+            <form action="/chat/{admin_id}/send" method="POST" enctype="multipart/form-data">
                 <input type="hidden" name="customer_id" value="{customer}">
                 
                 <div style="display: flex; gap: 15px; margin-bottom: 12px;">
                     <label style="font-weight: 500; cursor: pointer;">
-                        <input type="radio" name="sender_type" value="Client" checked> ส่งในนาม <b>ลูกค้า (Client)</b> [ให้ Gemini AI วิเคราะห์และตอบ]
+                        <input type="radio" name="sender_type" value="Client" checked> ส่งในนาม <b>ลูกค้า (Client)</b> [ให้ Gemini AI วิเคราะห์พร้อมรูปภาพ]
                     </label>
                     <label style="font-weight: 500; cursor: pointer;">
                         <input type="radio" name="sender_type" value="Human Agent"> ส่งในนาม <b>ทีมงาน (Human Agent)</b>
                     </label>
                 </div>
 
+                <div style="margin-bottom: 12px;">
+                    <label style="font-size: 13px; color: #475569; display: block; margin-bottom: 4px;">🖼️ แนบรูปภาพหน้างาน (เลือกได้หลายรูปพร้อมกัน)</label>
+                    <input type="file" name="customer_images" multiple accept="image/*" style="padding: 6px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; width: 100%;">
+                </div>
+
                 <div style="display: flex; gap: 10px;">
-                    <input type="text" name="message_text" placeholder="พิมพ์ข้อความที่ลูกค้าส่งมา..." required style="flex-grow: 1; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px;">
-                    <button type="submit" style="background: #10b981; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; white-space: nowrap;">ส่งข้อความ</button>
+                    <input type="text" name="message_text" placeholder="พิมพ์ข้อความที่ลูกค้าส่งมา..." style="flex-grow: 1; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px;">
+                    <button type="submit" style="background: #10b981; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; white-space: nowrap;">ส่งข้อความ/รูป</button>
                 </div>
             </form>
         </div>
