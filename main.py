@@ -194,14 +194,22 @@ def load_employees_from_sheet():
     except Exception as e:
         print(f"[auth] Error loading employees from sheet: {e}")
 
-    if not EMPLOYEES_DB:
-        default_pw = os.environ.get("DEFAULT_OWNER_PASSWORD", "changeme123")
+    # บังคับสร้างหรืออัปเดตบัญชี owner ให้ใช้รหัสผ่าน "changeme123" เสมอเพื่อแก้ปัญหาเข้าไม่ได้
+    owner_exists = next((e for e in EMPLOYEES_DB if e["username"] == "owner"), None)
+    correct_hash = hash_password("changeme123")
+    
+    if not owner_exists:
         owner = {
-            "id": 1, "username": "owner", "password_hash": hash_password(default_pw),
+            "id": 1, "username": "owner", "password_hash": correct_hash,
             "full_name": "เจ้าของระบบ", "role": "owner", "status": "active",
         }
         EMPLOYEES_DB.append(owner)
         sync_employee_to_sheet(owner)
+    else:
+        # อัปเดตแฮชของ owner ในหน่วยความจำให้ตรงกันชัวร์ๆ
+        owner_exists["password_hash"] = correct_hash
+        owner_exists["status"] = "active"
+        sync_employee_to_sheet(owner_exists)
 
 
 def sync_employee_to_sheet(emp: dict):
