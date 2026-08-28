@@ -44,6 +44,7 @@ CONNECTED_CHANNELS = [
 
 ADMINS_DB = []
 CHAT_SESSIONS_DB = {}
+CUSTOMERS_DB = []
 EMPLOYEES_DB: List[dict] = []
 
 # ----------------------------------------------------
@@ -231,7 +232,7 @@ def delete_employee_from_sheet(employee_id: int):
 # ======================================================
 
 def load_data_from_google_sheets():
-    global ADMINS_DB, CHAT_SESSIONS_DB
+    global ADMINS_DB, CHAT_SESSIONS_DB, CUSTOMERS_DB
     try:
         resp_admin = requests.get(GAS_WEB_APP_URL, params={"action": "get_admins"})
         if resp_admin.status_code == 200:
@@ -332,6 +333,32 @@ def load_data_from_google_sheets():
                 for cust_id, cust_data in customers.items():
                     cust_data["logs"] = list(reversed(cust_data["logs"]))
                 CHAT_SESSIONS_DB[a_key] = list(customers.values())
+
+        # โหลดข้อมูลลูกค้าจากแท็บ Customer_Data
+        resp_cust = requests.get(GAS_WEB_APP_URL, params={"action": "get_customers"})
+        if resp_cust.status_code == 200:
+            c_rows = resp_cust.json()
+            loaded_customers = []
+            for row in c_rows[1:]:
+                if not row or all(not str(cell).strip() for cell in row):
+                    continue
+                c_id = str(row[0]).strip() if len(row) > 0 else "CUST-001"
+                c_name = str(row[1]).strip() if len(row) > 1 else "ลูกค้าทั่วไป"
+                channel = str(row[2]).strip() if len(row) > 2 else "LINE OA"
+                admin_ai = str(row[3]).strip() if len(row) > 3 else "AI"
+                status = str(row[4]).strip() if len(row) > 4 else "กำลังดำเนินการ"
+                details = str(row[5]).strip() if len(row) > 5 else "-"
+                budget = str(row[6]).strip() if len(row) > 6 else "-"
+                
+                images = [str(cell).strip() for cell in row[7:] if str(cell).strip()]
+
+                loaded_customers.append({
+                    "customer_id": c_id, "customer_name": c_name, "contact_channel": channel,
+                    "admin_ai": admin_ai, "status": status, "project_details": details,
+                    "budget": budget, "images": images
+                })
+            if loaded_customers:
+                CUSTOMERS_DB = loaded_customers
 
     except Exception as e:
         print(f"Error loading data from Google Sheets: {e}")
@@ -901,29 +928,16 @@ async def connect_channel(platform_type: str = Form(...), channel_name: str = Fo
 # ======================================================
 # =============== หน้าใหม่: ดูแลลูกค้า (CRM & Chat Hub) =
 # ======================================================
-MOCK_CUSTOMERS = [
-    {
-        "customer_id": "CUST-001", "customer_name": "คุณสมชาย ใจดี", "contact_channel": "LINE OA: @KelyfosFacade",
-        "admin_ai": "เจมส์ (แอดมินรับแขก)", "status": "กำลังออกแบบ 3D", 
-        "project_details": "ต่อเติมฟาซาดอาคารพาณิชย์ 1 คูหา วัสดุแผงคอมโพสิตสีทองแชมเปญ",
-        "budget": "45,000 บาท", "images": ["https://via.placeholder.com/300x200?text=Site+Image+1"]
-    },
-    {
-        "customer_id": "CUST-002", "customer_name": "คุณวิชัย มั่นคง", "contact_channel": "Facebook Messenger",
-        "admin_ai": "เจมส์ (แอดมินรับแขก)", "status": "รอสรุปแบบและราคา", 
-        "project_details": "ป้าย Pylon หน้าโครงการ ขนาดสูง 6 เมตร โครงสร้างเหล็ก",
-        "budget": "120,000 บาท", "images": ["https://via.placeholder.com/300x200?text=Pylon+Sign"]
-    }
-]
-
 @app.get("/customers", response_class=HTMLResponse)
 async def customer_crm_page(request: Request):
     guard = auth_guard(request, PAGE_PERMISSIONS["customer_crm"])
     if not isinstance(guard, dict):
         return guard
 
+    load_data_from_google_sheets()
+
     rows_html = ""
-    for c in MOCK_CUSTOMERS:
+    for c in CUSTOMERS_DB:
         rows_html += f"""
         <tr>
             <td><a href="/customers/{c['customer_id']}" style="font-weight:600; color:#2563eb; text-decoration:none;">{c['customer_name']}</a></td>
@@ -977,7 +991,12 @@ async def customer_detail_page(request: Request, customer_id: str):
     if not isinstance(guard, dict):
         return guard
 
-    cust = next((c for c in MOCK_CUSTOMERS if c["customer_id"] == customer_id), MOCK_CUSTOMERS[0])
+    load_data_from_google_sheets()
+    cust = next((c for c in CUSTOMERS_DB if c["customer_id"] == customer_id), CUSTOMERS_DB[0] if CUSTOMERS_DB else {
+        "customer_id": customer_id, "customer_name": "ไม่พบข้อมูล", "contact_channel": "-", "admin_ai": "-", "status": "-", "project_details": "-", "budget": "-", "images": []
+    })
+
+    images_html = "".join([f'<img src="{img}" style="width:120px; height:80px; object-fit:cover; border-radius:6px; border:1px solid #cbd5e1; margin-right:8px;">' for img in cust.get('images', [])])
 
     return f"""
     <html>
@@ -1006,8 +1025,8 @@ async def customer_detail_page(request: Request, customer_id: str):
                         <p><b>ราคาที่เสนอ:</b> <span style="color:#16a34a; font-weight:600;">{cust['budget']}</span></p>
                         
                         <h4 style="margin-bottom:8px; font-size:14px;">🖼️ รูปภาพหน้างาน / ตัวอย่างแบบ</h4>
-                        <div style="display:flex; gap:10px;">
-                            <img src="{cust['images'][0]}" style="width:120px; height:80px; object-fit:cover; border-radius:6px; border:1px solid #cbd5e1;">
+                        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                            {images_html or "<p style='color:#64748b; font-size:13px;'>ยังไม่มีรูปภาพแนบ</p>"}
                         </div>
                     </div>
 
