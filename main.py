@@ -165,7 +165,6 @@ def auth_guard(request: Request, allowed_roles: Optional[List[str]] = None):
         return HTMLResponse(content=_forbidden_page_html(), status_code=403)
     return emp
 
-
 def load_employees_from_sheet():
     global EMPLOYEES_DB
     try:
@@ -181,10 +180,11 @@ def load_employees_from_sheet():
                 except Exception:
                     e_id = idx
                 username = str(row[1]).strip() if len(row) > 1 else f"user{e_id}"
-                password_hash = str(row[2]) if len(row) > 2 else ""
-                full_name = str(row[3]) if len(row) > 3 else username
+                password_hash = str(row[2]).strip() if len(row) > 2 else ""
+                full_name = str(row[3]).strip() if len(row) > 3 else username
                 role = str(row[4]).strip() if len(row) > 4 and str(row[4]).strip() in ROLES else "admin"
                 status = str(row[5]).strip() if len(row) > 5 and str(row[5]).strip() else "active"
+                
                 loaded.append({
                     "id": e_id, "username": username, "password_hash": password_hash,
                     "full_name": full_name, "role": role, "status": status,
