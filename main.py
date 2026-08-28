@@ -200,8 +200,6 @@ def load_employees_from_sheet():
         }
         EMPLOYEES_DB.append(owner)
         sync_employee_to_sheet(owner)
-        print(f"[auth] สร้างบัญชี owner เริ่มต้นแล้ว: username='owner' password='{default_pw}' "
-              f"— กรุณาเปลี่ยนรหัสผ่านทันทีหลัง login ครั้งแรก")
 
 
 def sync_employee_to_sheet(emp: dict):
@@ -255,11 +253,10 @@ def load_data_from_google_sheets():
                 system_prompt = str(row[5]) if len(row) > 5 else "คุณคือแอดมิน AI อัจฉริยะ ตอบกระชับ เป็นมืออาชีพ"
                 gender = str(row[6]) if len(row) > 6 and str(row[6]).strip() else "ครับ"
                 
-                # ฟิลด์ข้อมูลที่ต้องการให้ AI รวบรวมจากลูกค้า และข้อมูลเฉพาะ Designer
-                required_data_fields = str(row[7]) if len(row) > 7 and str(row[7]).strip() else "ขนาดพื้นที่, รูปภาพหน้างาน, เบอร์โทรติดต่อ"
+                required_data_fields = str(row[7]) if len(row) > 7 and str(row[7]).strip() else ""
                 design_style = str(row[8]) if len(row) > 8 and str(row[8]).strip() else "Modern Luxury, Parametric Design"
                 material_specs = str(row[9]) if len(row) > 9 and str(row[9]).strip() else "แผงอลูมิเนียมคอมโพสิต ACP, โครงเหล็กมาตรฐาน"
-                portfolio_link = str(row[10]) if len(row) > 10 and str(row[10]).strip() else ""
+                portfolio_link = ""
 
                 loaded_admins.append({
                     "id": a_id,
@@ -374,7 +371,7 @@ def sync_admin_to_sheet(admin_data):
         "required_data_fields": admin_data.get("required_data_fields", ""),
         "design_style": admin_data.get("design_style", ""),
         "material_specs": admin_data.get("material_specs", ""),
-        "portfolio_link": admin_data.get("portfolio_link", "")
+        "portfolio_link": ""
     }
     try:
         requests.post(GAS_WEB_APP_URL, json=payload)
@@ -398,7 +395,6 @@ def delete_admin_from_sheet(admin_id):
 def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: str) -> str:
     role_key = admin_info.get("ai_role", "admin")
 
-    # FAQ pairs check applies to non-designer roles
     if role_key != "designer":
         faq_pairs = admin_info.get("faq_pairs", [])
         for faq in faq_pairs:
@@ -418,7 +414,7 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
     try:
         gender_term = admin_info.get('gender', 'ครับ')
         role_title = AI_ROLES.get(role_key, {}).get('name', 'พนักงาน AI')
-        required_fields = admin_info.get('required_data_fields', 'ขนาดพื้นที่, รูปภาพ, เบอร์โทร')
+        required_fields = admin_info.get('required_data_fields', '')
 
         role_specific_instruction = ""
         if role_key == "designer":
@@ -430,7 +426,7 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
             - เมื่อออกแบบเสร็จแล้ว หรือเกิดกรณีติดปัญหา หรือลูกค้าให้ออกแบบใหม่แล้วไม่ผ่านครบ 2 รอบ ให้ส่งข้อความแจ้งเตือนคนจริงเพื่อยืนยันหรือแก้ไข และส่งต่อให้ทีมงานดูแลต่อทันที
             - วัสดุและสเปกมาตรฐานของบริษัทที่ต้องใช้อ้างอิง: {admin_info.get('material_specs', 'แผงอลูมิเนียมคอมโพสิต ACP, โครงเหล็กมาตรฐาน')}
             - สไตล์การออกแบบหลัก: {admin_info.get('design_style', 'Modern Luxury, Parametric Design')}
-            - คลังรูปภาพตัวอย่างงานที่ออกแบบ (Portfolio): {admin_info.get('portfolio_link', '')}
+            - อ้างอิงรูปภาพตัวอย่างผลงานจากคลังข้อมูลอ้างอิงด้านล่าง
             - หากลูกค้าขอแก้ไขแบบ ให้ปรับแต่งและส่งกลับมาให้คนจริงยืนยันใหม่อีกครั้ง จนกว่าจะผ่าน
             """
 
@@ -440,8 +436,7 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
         - บริษัท/แบรนด์: Kelyfos Facade
         - สรรพนามลงท้าย/เพศการพูดคุย: ลงท้ายด้วย '{gender_term}'
 
-        [เป้าหมายการรวบรวมข้อมูลจากลูกค้า]:
-        {required_fields}
+        {f'[ข้อมูลที่ต้องรวบรวม]: {required_fields}' if required_fields else ''}
 
         {role_specific_instruction}
 
@@ -455,7 +450,7 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
         [เงื่อนไขคีย์เวิร์ดส่งต่อทีมงาน]:
         {admin_info.get('keywords', '')}
 
-        [คลังข้อมูลความรู้และอ้างอิง (รูปภาพตัวอย่างงานที่ออกแบบ)]:
+        [คลังข้อมูลความรู้และรูปภาพตัวอย่างงานอ้างอิง]:
         {knowledge_context}
         """
 
@@ -940,16 +935,15 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
     role_title = AI_ROLES.get(role, {}).get("name", "พนักงาน AI")
     title = f"⚙️ ตั้งค่าพนักงาน [{role_title}]: {admin_data['name']}" if admin_id else f"➕ สร้างพนักงานใหม่: {role_title}"
 
-    # ฟิลด์เฉพาะสำหรับ Designer
+    # ฟิลด์เฉพาะสำหรับ Designer (เอาช่องลิงก์คลังรูปภาพออกแล้ว)
     role_specific_fields_html = ""
     if role == "designer":
         role_specific_fields_html = f"""
         <div style="background:#fdf4ff; border:1px solid #f5d0fe; padding:20px; border-radius:8px; margin-top:20px;">
             <label style="font-weight:600; color:#86198f; margin-top:0; display:block;">🎨 ข้อมูลเฉพาะทางสำหรับ AI Designer (นักออกแบบ)</label>
-            <p style="font-size:13px; color:#a21caf; margin-top:4px; margin-bottom:10px;">ระบุสไตล์หลัก วัสดุมาตรฐาน และลิงก์พอร์ตโฟลิโอ เพื่อให้ AI ใช้เสนอแบบ 4 รูปแบบตามสเปกบริษัท</p>
+            <p style="font-size:13px; color:#a21caf; margin-top:4px; margin-bottom:10px;">ระบุสไตล์หลัก และวัสดุมาตรฐาน เพื่อให้ AI ใช้เสนอแบบตามสเปกบริษัท (รูปภาพตัวอย่างผลงานจะถูกดึงจากคลังข้อมูลอ้างอิงด้านล่าง)</p>
             <input type="text" name="design_style" value="{admin_data.get('design_style', '')}" placeholder="สไตล์การออกแบบ (เช่น Modern Luxury, Minimalist, Parametric)" style="width:100%; padding:10px; margin-bottom:10px; border:1px solid #f0abfc; border-radius:6px; background:white;">
-            <input type="text" name="material_specs" value="{admin_data.get('material_specs', '')}" placeholder="วัสดุหลัก/สเปก (เช่น แผง ACP ความหนา 4 มม. สี PVDF, โครงเหล็กมาตรฐาน)" style="width:100%; padding:10px; margin-bottom:10px; border:1px solid #f0abfc; border-radius:6px; background:white;">
-            <input type="text" name="portfolio_link" value="{admin_data.get('portfolio_link', '')}" placeholder="ลิงก์คลังรูปภาพ / ตัวอย่างผลงาน (Google Drive Portfolio)" style="width:100%; padding:10px; border:1px solid #f0abfc; border-radius:6px; background:white;">
+            <input type="text" name="material_specs" value="{admin_data.get('material_specs', '')}" placeholder="วัสดุหลัก/สเปก (เช่น แผง ACP ความหนา 4 มม. สี PVDF, โครงเหล็กมาตรฐาน)" style="width:100%; padding:10px; border:1px solid #f0abfc; border-radius:6px; background:white;">
         </div>
         """
 
@@ -982,7 +976,6 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
         """
 
     faq_html = ""
-    # Only show FAQ pairs for non-designer roles as requested
     if role != "designer":
         for faq in admin_data.get('faq_pairs', []):
             faq_html += f"""
@@ -1009,6 +1002,19 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
             <button type="button" class="btn-add" onclick="addFaqField()">+ เพิ่มคู่ FAQ พร้อมรูปภาพ</button>
         </div>
         """
+
+    # เอาส่วนข้อมูลที่ต้องการให้ AI ซักถามออกเฉพาะ Designer
+    required_data_section = ""
+    if role != "designer":
+        required_data_section = f"""
+        <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:20px; border-radius:8px; margin-top:20px;">
+            <label style="font-weight:600; color:#1e40af; margin-top:0; display:block;">📋 ข้อมูลที่ต้องการให้ AI ซักถามและรวบรวมจากลูกค้า</label>
+            <p style="font-size:13px; color:#3b82f6; margin-top:4px; margin-bottom:10px;">ระบุสิ่งที่ต้องการให้ AI เจาะถามลูกค้า เช่น ขนาดพื้นที่, รูปภาพหน้างาน, เบอร์โทรติดต่อ ฯลฯ</p>
+            <textarea name="required_data_fields" style="width:100%; height:80px; padding:10px; border:1px solid #93c5fd; border-radius:6px; background:white;">{admin_data.get('required_data_fields', '')}</textarea>
+        </div>
+        """
+    else:
+        required_data_section = '<input type="hidden" name="required_data_fields" value="">'
 
     return f"""
     <html>
@@ -1080,11 +1086,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
                         <option value="สุภาพ" {gender_selected_neutral}>สุภาพ / กลางๆ</option>
                     </select>
 
-                    <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:20px; border-radius:8px; margin-top:20px;">
-                        <label style="font-weight:600; color:#1e40af; margin-top:0; display:block;">📋 ข้อมูลที่ต้องการให้ AI ซักถามและรวบรวมจากลูกค้า</label>
-                        <p style="font-size:13px; color:#3b82f6; margin-top:4px; margin-bottom:10px;">ระบุสิ่งที่ต้องการให้ AI เจาะถามลูกค้า เช่น ขนาดพื้นที่, รูปภาพหน้างาน, เบอร์โทรติดต่อ ฯลฯ</p>
-                        <textarea name="required_data_fields" style="width:100%; height:80px; padding:10px; border:1px solid #93c5fd; border-radius:6px; background:white;">{admin_data.get('required_data_fields', '')}</textarea>
-                    </div>
+                    {required_data_section}
 
                     {role_specific_fields_html}
 
@@ -1184,7 +1186,7 @@ async def save_admin(
                 a["required_data_fields"] = required_data_fields
                 a["design_style"] = design_style
                 a["material_specs"] = material_specs
-                a["portfolio_link"] = portfolio_link
+                a["portfolio_link"] = ""
                 a["categories"] = categories_list
                 a["faq_pairs"] = faq_list
                 saved_admin_obj = a
@@ -1199,7 +1201,7 @@ async def save_admin(
             "required_data_fields": required_data_fields,
             "design_style": design_style,
             "material_specs": material_specs,
-            "portfolio_link": portfolio_link,
+            "portfolio_link": "",
             "categories": categories_list, 
             "faq_pairs": faq_list, "pending_count": 0
         }
