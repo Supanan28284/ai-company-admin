@@ -196,7 +196,7 @@ def load_employees_from_sheet():
 
     # บังคับสร้างหรืออัปเดตบัญชี owner ให้ใช้รหัสผ่าน "changeme123" เสมอเพื่อแก้ปัญหาเข้าไม่ได้
     owner_exists = next((e for e in EMPLOYEES_DB if e["username"] == "owner"), None)
-    correct_hash = hash_password("changeme123")
+    correct_hash = hash_password("KELY28284")
     
     if not owner_exists:
         owner = {
