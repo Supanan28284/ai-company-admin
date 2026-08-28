@@ -251,7 +251,7 @@ def load_data_from_google_sheets():
                 name = str(row[1]) if len(row) > 1 and str(row[1]).strip() else f"Admin-{a_id}"
                 ai_role = str(row[2]) if len(row) > 2 and str(row[2]).strip() in AI_ROLES else "admin"
                 channels_raw = str(row[3]) if len(row) > 3 else "[]"
-                keywords = str(row[4]) if len(row) > 4 else "ลดราคา, ขอราคาพิเศษ"
+                keywords = str(row[4]) if len(row) > 4 else "ออกแบบเสร็จ, ติดปัญหา, ลูกค้าให้ออกแบบใหม่แล้วไม่ผ่าน2รอบแล้ว"
                 system_prompt = str(row[5]) if len(row) > 5 else "คุณคือแอดมิน AI อัจฉริยะ ตอบกระชับ เป็นมืออาชีพ"
                 gender = str(row[6]) if len(row) > 6 and str(row[6]).strip() else "ครับ"
                 
@@ -396,37 +396,42 @@ def delete_admin_from_sheet(admin_id):
 
 
 def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: str) -> str:
-    faq_pairs = admin_info.get("faq_pairs", [])
-    for faq in faq_pairs:
-        trigger = faq.get("trigger", "").strip()
-        answer = faq.get("answer", "").strip()
-        image_url = faq.get("image_url", "").strip()
+    role_key = admin_info.get("ai_role", "admin")
 
-        if trigger and trigger.lower() in customer_message.lower():
-            response_result = answer
-            if image_url:
-                response_result += f"\n[รูปภาพประกอบ: {image_url}]"
-            return response_result
+    # FAQ pairs check applies to non-designer roles
+    if role_key != "designer":
+        faq_pairs = admin_info.get("faq_pairs", [])
+        for faq in faq_pairs:
+            trigger = faq.get("trigger", "").strip()
+            answer = faq.get("answer", "").strip()
+            image_url = faq.get("image_url", "").strip()
+
+            if trigger and trigger.lower() in customer_message.lower():
+                response_result = answer
+                if image_url:
+                    response_result += f"\n[รูปภาพประกอบ: {image_url}]"
+                return response_result
 
     if not GEMINI_API_KEY:
         return f"[จำลอง AI]: ได้รับข้อความ '{customer_message}' แล้ว (กรุณาตั้งค่า GEMINI_API_KEY ใน Environment Variables)"
 
     try:
         gender_term = admin_info.get('gender', 'ครับ')
-        role_key = admin_info.get('ai_role', 'admin')
         role_title = AI_ROLES.get(role_key, {}).get('name', 'พนักงาน AI')
         required_fields = admin_info.get('required_data_fields', 'ขนาดพื้นที่, รูปภาพ, เบอร์โทร')
 
-        # คำสั่งเฉพาะทางตาม Role เช่น Designer เสนอ 4 แบบ และใช้วัสดุบริษัท
         role_specific_instruction = ""
         if role_key == "designer":
             role_specific_instruction = f"""
             [คำสั่งเฉพาะตำแหน่ง AI Designer (นักออกแบบ)]:
             - คุณคือนักออกแบบมืออาชีพของบริษัท Kelyfos Facade
-            - หน้าที่: รับช่วงต่อข้อมูลจาก Admin, นำเสนอแบบตกแต่งอาคารเสมือนจริง หากลูกค้ายังไม่มีแบบในใจ ให้เสนอแนวทางตัวอย่าง 4 แบบให้เลือก
+            - หน้าที่: รับช่วงต่อข้อมูลจาก Admin เมื่อข้อมูลลูกค้าครบถ้วนหรือลูกค้าสั่งให้ออกแบบ
+            - การทำงาน: วิเคราะห์สิ่งที่ลูกค้าต้องการจากข้อมูลที่ admin รวบรวมมา หากลูกค้ายังไม่มีแบบเริ่มต้นหรือไอเดียเริ่มต้น ให้ออกแบบเสนอ 4 แบบที่คุมโทนและแนวทางเดียวกัน ให้ลูกค้าเลือกพิจารณาก่อน
+            - เมื่อออกแบบเสร็จแล้ว หรือเกิดกรณีติดปัญหา หรือลูกค้าให้ออกแบบใหม่แล้วไม่ผ่านครบ 2 รอบ ให้ส่งข้อความแจ้งเตือนคนจริงเพื่อยืนยันหรือแก้ไข และส่งต่อให้ทีมงานดูแลต่อทันที
             - วัสดุและสเปกมาตรฐานของบริษัทที่ต้องใช้อ้างอิง: {admin_info.get('material_specs', 'แผงอลูมิเนียมคอมโพสิต ACP, โครงเหล็กมาตรฐาน')}
             - สไตล์การออกแบบหลัก: {admin_info.get('design_style', 'Modern Luxury, Parametric Design')}
-            - รับคำติชมและแก้ไขแบบจนกว่าลูกค้าพอใจ พร้อมแจ้งเตือนเงื่อนไขเสมอว่า: "แบบทั้งหมดจะต้องถูกส่งให้ทีมงานจริงตรวจสอบยืนยันก่อนส่งมอบให้ลูกค้าทุกครั้ง"
+            - คลังรูปภาพตัวอย่างงานที่ออกแบบ (Portfolio): {admin_info.get('portfolio_link', '')}
+            - หากลูกค้าขอแก้ไขแบบ ให้ปรับแต่งและส่งกลับมาให้คนจริงยืนยันใหม่อีกครั้ง จนกว่าจะผ่าน
             """
 
         profile_instruction = f"""
@@ -450,7 +455,7 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
         [เงื่อนไขคีย์เวิร์ดส่งต่อทีมงาน]:
         {admin_info.get('keywords', '')}
 
-        [คลังข้อมูลความรู้และอ้างอิง]:
+        [คลังข้อมูลความรู้และอ้างอิง (รูปภาพตัวอย่างงานที่ออกแบบ)]:
         {knowledge_context}
         """
 
@@ -915,7 +920,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
 
     admin_data = {
         "id": "", "name": "", "ai_role": role, "gender": "ครับ", "channels": [],
-        "keywords": "ลดราคา, ขอราคาพิเศษ, คุยกับคน, นัดดูหน้างาน",
+        "keywords": "ออกแบบเสร็จ, ติดปัญหา, ลูกค้าให้ออกแบบใหม่แล้วไม่ผ่าน2รอบแล้ว",
         "system_prompt": "คุณคือแอดมิน AI อัจฉริยะ ตอบคำถามกระชับ เป็นมืออาชีพ ตรงประเด็น",
         "required_data_fields": "ขนาดพื้นที่, รูปภาพหน้างาน, เบอร์โทรติดต่อลูกค้า",
         "design_style": "Modern Luxury, Parametric Design",
@@ -977,17 +982,31 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
         """
 
     faq_html = ""
-    for faq in admin_data.get('faq_pairs', []):
-        faq_html += f"""
-        <div class="faq-item" style="background: #f8fafc; padding: 15px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px;">
-            <div style="display: flex; gap: 10px; margin-bottom: 8px;">
-                <input type="text" name="faq_trigger" value="{faq.get('trigger', '')}" placeholder="คำที่ลูกค้าพิมพ์ เช่น ขอราคา" style="flex: 1; margin-top:0;">
-                <input type="text" name="faq_answer" value="{faq.get('answer', '')}" placeholder="คำตอบข้อความสำเร็จรูป" style="flex: 2; margin-top:0;">
+    # Only show FAQ pairs for non-designer roles as requested
+    if role != "designer":
+        for faq in admin_data.get('faq_pairs', []):
+            faq_html += f"""
+            <div class="faq-item" style="background: #f8fafc; padding: 15px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px;">
+                <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+                    <input type="text" name="faq_trigger" value="{faq.get('trigger', '')}" placeholder="คำที่ลูกค้าพิมพ์ เช่น ขอราคา" style="flex: 1; margin-top:0;">
+                    <input type="text" name="faq_answer" value="{faq.get('answer', '')}" placeholder="คำตอบข้อความสำเร็จรูป" style="flex: 2; margin-top:0;">
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <input type="text" name="faq_image" value="{faq.get('image_url', '')}" placeholder="🖼️ URL ลิงก์รูปภาพประกอบ (ไม่ใส่ก็ได้)" style="flex: 1; margin-top:0; font-size: 13px;">
+                    <button type="button" onclick="this.parentElement.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap;">ลบแถวนี้</button>
+                </div>
             </div>
-            <div style="display: flex; gap: 10px; align-items: center;">
-                <input type="text" name="faq_image" value="{faq.get('image_url', '')}" placeholder="🖼️ URL ลิงก์รูปภาพประกอบ (ไม่ใส่ก็ได้)" style="flex: 1; margin-top:0; font-size: 13px;">
-                <button type="button" onclick="this.parentElement.parentElement.remove()" style="background: #ef4444; color: white; border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap;">ลบแถวนี้</button>
+            """
+
+    faq_section_html = ""
+    if role != "designer":
+        faq_section_html = f"""
+        <div class="section">
+            <h3 style="margin-top: 0; font-size: 16px;">⚡ คลังคู่คำถาม-คำตอบยอดฮิต (Dynamic FAQ Pairs)</h3>
+            <div id="faq-container" style="margin-top: 15px;">
+                {faq_html}
             </div>
+            <button type="button" class="btn-add" onclick="addFaqField()">+ เพิ่มคู่ FAQ พร้อมรูปภาพ</button>
         </div>
         """
 
@@ -1026,6 +1045,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
 
                 function addFaqField() {{
                     const container = document.getElementById('faq-container');
+                    if (!container) return;
                     const div = document.createElement('div');
                     div.className = 'faq-item';
                     div.style = "background: #f8fafc; padding: 15px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px;";
@@ -1077,13 +1097,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
                         <textarea name="system_prompt">{admin_data['system_prompt']}</textarea>
                     </div>
                     
-                    <div class="section">
-                        <h3 style="margin-top: 0; font-size: 16px;">⚡ คลังคู่คำถาม-คำตอบยอดฮิต (Dynamic FAQ Pairs)</h3>
-                        <div id="faq-container" style="margin-top: 15px;">
-                            {faq_html}
-                        </div>
-                        <button type="button" class="btn-add" onclick="addFaqField()">+ เพิ่มคู่ FAQ พร้อมรูปภาพ</button>
-                    </div>
+                    {faq_section_html}
 
                     <div class="section">
                         <h3 style="margin-top: 0; font-size: 16px;">🚨 เงื่อนไขการส่งต่อให้ทีมงาน</h3>
@@ -1150,11 +1164,12 @@ async def save_admin(
         categories_list.append({"cat_name": c_name, "drive_link": c_link, "files": files_collected})
 
     faq_list = []
-    for i, trig in enumerate(faq_triggers):
-        if trig.strip():
-            ans = faq_answers[i] if i < len(faq_answers) else ""
-            img = faq_images[i] if i < len(faq_images) else ""
-            faq_list.append({"trigger": trig.strip(), "answer": ans.strip(), "image_url": img.strip()})
+    if ai_role != "designer":
+        for i, trig in enumerate(faq_triggers):
+            if trig.strip():
+                ans = faq_answers[i] if i < len(faq_answers) else ""
+                img = faq_images[i] if i < len(faq_images) else ""
+                faq_list.append({"trigger": trig.strip(), "answer": ans.strip(), "image_url": img.strip()})
 
     saved_admin_obj = None
     if admin_id and admin_id.isdigit():
@@ -1225,7 +1240,7 @@ async def send_chat_message(
 
     knowledge_context = ""
     if "categories" in admin_info:
-        knowledge_context = "\n".join([f"- หมวด {cat['cat_name']}: ลิงก์อ้างอิง {cat['drive_link']}" for cat in admin_info["categories"]])
+        knowledge_context = "\n".join([f"- หมวด {cat['cat_name']}: ลิงก์อ้างอิงรูปภาพผลงาน/ข้อมูล {cat['drive_link']}" for cat in admin_info["categories"]])
 
     keywords_list = [k.strip() for k in admin_info["keywords"].split(",")] if admin_info else []
 
