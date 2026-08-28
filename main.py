@@ -37,9 +37,9 @@ FB_VERIFY_TOKEN = os.environ.get("FB_VERIFY_TOKEN", "kelyfos_verify_token_secure
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN", "")
 
 CONNECTED_CHANNELS = [
-    {"id": "line_01", "name": "LINE OA: @KelyfosFacade", "status": "เชื่อมต่อแล้ว"},
-    {"id": "fb_01", "name": "Facebook Messenger: Kelyfos Official", "status": "เชื่อมต่อแล้ว"},
-    {"id": "line_02", "name": "LINE OA: @ModernSignage", "status": "เชื่อมต่อแล้ว"}
+    {"id": "line_01", "name": "LINE OA: @KelyfosFacade", "type": "LINE OA", "status": "เชื่อมต่อแล้ว"},
+    {"id": "fb_01", "name": "Facebook Messenger: Kelyfos Official", "type": "Facebook Messenger", "status": "เชื่อมต่อแล้ว"},
+    {"id": "line_02", "name": "LINE OA: @ModernSignage", "type": "LINE OA", "status": "เชื่อมต่อแล้ว"}
 ]
 
 ADMINS_DB = []
@@ -90,6 +90,7 @@ PAGE_PERMISSIONS = {
     "warehouse_module":      ["owner", "warehouse"],
     "site_module":           ["owner", "foreman"],
     "qc_module":             ["owner", "qc"],
+    "customer_crm":          ["owner", "admin"],
 }
 
 
@@ -737,7 +738,7 @@ async def employee_delete(request: Request, employee_id: int):
 
 
 # ======================================================
-# ===============  หน้า Dashboard หลัก  =================
+# ===============  หน้า Dashboard หลัก  ================
 # ======================================================
 
 @app.get("/", response_class=HTMLResponse)
@@ -753,14 +754,17 @@ async def main_dashboard(request: Request):
     for ch in CONNECTED_CHANNELS:
         channels_html += f"""
         <div style="background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px 16px; margin-bottom: 8px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: 500; color: #1e293b;">{ch['name']}</span>
+            <div>
+                <span style="font-weight: 600; color: #1e293b; margin-right: 10px;">{ch['name']}</span>
+                <span style="font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 4px;">{ch.get('type', 'Social')}</span>
+            </div>
             <span style="background: #dcfce7; color: #166534; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600;">● {ch['status']}</span>
         </div>
         """
 
     rows_html = ""
     if not ADMINS_DB:
-        rows_html = "<tr><td colspan='6' style='text-align: center; color: #64748b; padding: 20px;'>ยังไม่มีข้อมูลพนักงาน AI ในระบบ</td></tr>"
+        rows_html = "<tr><td colspan='5' style='text-align: center; color: #64748b; padding: 20px;'>ยังไม่มีข้อมูลพนักงาน AI ในระบบ</td></tr>"
     else:
         for admin in ADMINS_DB:
             role_display = AI_ROLES.get(admin.get("ai_role"), {}).get("name", "แอดมินรับแขก")
@@ -773,7 +777,6 @@ async def main_dashboard(request: Request):
             <tr>
                 <td style="font-weight: 600; color: #0f172a;">{admin['name']} <span style="font-size:11px; color:#64748b; font-weight:normal;">({admin.get('gender', 'ครับ')})</span></td>
                 <td><span style="background: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">{role_display}</span></td>
-                <td><span style="color: #059669; font-weight: 500;">{admin['status']}</span></td>
                 <td style="color: #475569; font-size: 13px;">{channels_str}</td>
                 <td><span style="background: {badge_bg}; color: {badge_color}; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap;">{badge_text}</span></td>
                 <td style="white-space: nowrap;">
@@ -791,7 +794,7 @@ async def main_dashboard(request: Request):
     html_content = f"""
     <html>
         <head>
-            <title>ศูนย์ควบคุม AI สำหรับผู้ดูแลระบบ</title>
+            <title>AI Dashboard</title>
             <style>
                 body {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #f1f5f9; margin: 0; padding: 30px; color: #334155; }}
                 .container {{ max-width: 1250px; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); margin: auto; }}
@@ -801,6 +804,8 @@ async def main_dashboard(request: Request):
                 .user-info {{ font-size: 13px; color:#64748b; margin-bottom:15px; text-align:right; }}
                 .user-info a {{ color:#ef4444; text-decoration:none; font-weight:600; margin-left:10px; }}
                 .btn-create {{ background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; white-space: nowrap; }}
+                .btn-primary {{ background: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; border: none; cursor: pointer; }}
+                .btn-secondary {{ background: #0ea5e9; color: white; padding: 10px 20px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; }}
                 .panel {{ background: #f8fafc; border: 1px solid #e2e8f0; padding: 20px; border-radius: 8px; margin-bottom: 30px; }}
                 table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
                 th, td {{ border-bottom: 1px solid #e2e8f0; padding: 14px 12px; text-align: left; vertical-align: middle; }}
@@ -810,7 +815,15 @@ async def main_dashboard(request: Request):
                 .btn-blue {{ background: #2563eb; }}
                 .btn-gray {{ background: #64748b; }}
                 .btn-red {{ background: #ef4444; }}
+                /* Modal Styles */
+                .modal {{ display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; }}
+                .modal-content {{ background: white; padding: 30px; border-radius: 12px; width: 400px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); position: relative; }}
+                .close {{ position: absolute; right: 20px; top: 15px; font-size: 24px; cursor: pointer; color: #64748b; }}
             </style>
+            <script>
+                function openModal() {{ document.getElementById('channelModal').style.display = 'flex'; }}
+                function closeModal() {{ document.getElementById('channelModal').style.display = 'none'; }}
+            </script>
         </head>
         <body>
             <div class="container">
@@ -819,24 +832,27 @@ async def main_dashboard(request: Request):
                     <a href="/logout">ออกจากระบบ</a>
                 </div>
                 <div class="header">
-                    <h2>🤖 ศูนย์ควบคุม AI สำหรับผู้ดูแลระบบ</h2>
+                    <h2>🤖 AI Dashboard</h2>
                     <div class="header-right">
+                        <a href="/customers" class="btn-secondary" style="margin-right:10px;">👥 ดูแลลูกค้า</a>
                         {employee_menu_html}
                         <a href="/create-role" class="btn-create">+ สร้างพนักงาน</a>
                     </div>
                 </div>
                 <div class="panel">
-                    <h3 style="margin-top: 0; color: #1e293b; font-size: 16px; margin-bottom: 15px;">🔗 ช่องทางการเชื่อมต่อ</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <h3 style="margin: 0; color: #1e293b; font-size: 16px;">🔗 ช่องทางการเชื่อมต่อ</h3>
+                        <button onclick="openModal()" class="btn-primary" style="padding: 6px 14px; font-size: 13px;">+ เพิ่มช่องทาง</button>
+                    </div>
                     {channels_html}
                 </div>
                 <h3>พนักงาน AI ทั้งหมดในระบบ</h3>
                 <table>
                     <thead>
                         <tr>
-                            <th width="18%">ชื่อพนักงาน</th>
-                            <th width="22%">ตำแหน่ง (Role)</th>
-                            <th width="10%">สถานะระบบ</th>
-                            <th width="22%">ช่องต่างๆ</th>
+                            <th width="22%">ชื่อพนักงาน</th>
+                            <th width="25%">ตำแหน่ง (Role)</th>
+                            <th width="25%">ช่องต่างๆ</th>
                             <th width="14%">สถานะคิว</th>
                             <th width="14%">การกระทำ</th>
                         </tr>
@@ -846,10 +862,175 @@ async def main_dashboard(request: Request):
                     </tbody>
                 </table>
             </div>
+
+            <!-- Modal สำหรับเลือกเพิ่มช่องทางโซเชียล -->
+            <div id="channelModal" class="modal">
+                <div class="modal-content">
+                    <span class="close" onclick="closeModal()">&times;</span>
+                    <h3 style="margin-top:0; color:#0f172a;">เลือกช่องทางที่ต้องการเชื่อมต่อ</h3>
+                    <form method="POST" action="/connect-channel" style="margin-top:20px;">
+                        <label style="font-weight:600; font-size:13px; display:block; margin-bottom:8px;">ประเภทแพลตฟอร์ม</label>
+                        <select name="platform_type" style="width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:6px; margin-bottom:15px;">
+                            <option value="Line">Line</option>
+                            <option value="LINE OA">LINE OA</option>
+                            <option value="Facebook Messenger">Facebook Messenger</option>
+                        </select>
+                        <label style="font-weight:600; font-size:13px; display:block; margin-bottom:8px;">ชื่อบัญชี / Token / Page ID</label>
+                        <input type="text" name="channel_name" placeholder="เช่น @KelyfosOfficial" required style="width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box; margin-bottom:20px;">
+                        <button type="submit" class="btn-primary" style="width:100%;">ยืนยันการเชื่อมต่อ</button>
+                    </form>
+                </div>
+            </div>
         </body>
     </html>
     """
     return HTMLResponse(content=html_content)
+
+
+@app.post("/connect-channel")
+async def connect_channel(platform_type: str = Form(...), channel_name: str = Form(...)):
+    CONNECTED_CHANNELS.append({
+        "id": f"ch_{len(CONNECTED_CHANNELS)+1}",
+        "name": f"{platform_type}: {channel_name}",
+        "type": platform_type,
+        "status": "เชื่อมต่อแล้ว"
+    })
+    return RedirectResponse(url="/", status_code=303)
+
+
+# ======================================================
+# =============== หน้าใหม่: ดูแลลูกค้า (CRM & Chat Hub) =
+# ======================================================
+MOCK_CUSTOMERS = [
+    {
+        "customer_id": "CUST-001", "customer_name": "คุณสมชาย ใจดี", "contact_channel": "LINE OA: @KelyfosFacade",
+        "admin_ai": "เจมส์ (แอดมินรับแขก)", "status": "กำลังออกแบบ 3D", 
+        "project_details": "ต่อเติมฟาซาดอาคารพาณิชย์ 1 คูหา วัสดุแผงคอมโพสิตสีทองแชมเปญ",
+        "budget": "45,000 บาท", "images": ["https://via.placeholder.com/300x200?text=Site+Image+1"]
+    },
+    {
+        "customer_id": "CUST-002", "customer_name": "คุณวิชัย มั่นคง", "contact_channel": "Facebook Messenger",
+        "admin_ai": "เจมส์ (แอดมินรับแขก)", "status": "รอสรุปแบบและราคา", 
+        "project_details": "ป้าย Pylon หน้าโครงการ ขนาดสูง 6 เมตร โครงสร้างเหล็ก",
+        "budget": "120,000 บาท", "images": ["https://via.placeholder.com/300x200?text=Pylon+Sign"]
+    }
+]
+
+@app.get("/customers", response_class=HTMLResponse)
+async def customer_crm_page(request: Request):
+    guard = auth_guard(request, PAGE_PERMISSIONS["customer_crm"])
+    if not isinstance(guard, dict):
+        return guard
+
+    rows_html = ""
+    for c in MOCK_CUSTOMERS:
+        rows_html += f"""
+        <tr>
+            <td><a href="/customers/{c['customer_id']}" style="font-weight:600; color:#2563eb; text-decoration:none;">{c['customer_name']}</a></td>
+            <td>{c['contact_channel']}</td>
+            <td>{c['admin_ai']}</td>
+            <td><span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:6px; font-size:12px; font-weight:600;">{c['status']}</span></td>
+            <td>{c['budget']}</td>
+            <td>
+                <a href="/customers/{c['customer_id']}" style="background:#2563eb; color:white; padding:6px 12px; text-decoration:none; border-radius:6px; font-size:13px;">เปิดแชท/ข้อมูล</a>
+            </td>
+        </tr>
+        """
+
+    return f"""
+    <html>
+        <head>
+            <title>ระบบดูแลลูกค้า (CRM)</title>
+            <style>
+                body {{ font-family: 'Inter', sans-serif; background: #f1f5f9; margin: 0; padding: 30px; color: #334155; }}
+                .container {{ max-width: 1200px; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); margin: auto; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+                th, td {{ border-bottom: 1px solid #e2e8f0; padding: 14px 12px; text-align: left; }}
+                th {{ background-color: #f8fafc; color: #475569; font-size: 13px; text-transform: uppercase; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <a href="/" style="text-decoration:none; color:#2563eb; font-weight:600; font-size:14px;">← กลับหน้าหลัก (Dashboard)</a>
+                <h2 style="color: #0f172a; margin-top: 15px;">👥 ระบบดูแลลูกค้า (Customer CRM & Chat Hub)</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ชื่อลูกค้า</th>
+                            <th>ช่องทางติดต่อ</th>
+                            <th>AI ผู้ดูแล</th>
+                            <th>สถานะงาน</th>
+                            <th>ราคาเสนอ</th>
+                            <th>การกระทำ</th>
+                        </tr>
+                    </thead>
+                    <tbody>{rows_html}</tbody>
+                </table>
+            </div>
+        </body>
+    </html>
+    """
+
+@app.get("/customers/{customer_id}", response_class=HTMLResponse)
+async def customer_detail_page(request: Request, customer_id: str):
+    guard = auth_guard(request, PAGE_PERMISSIONS["customer_crm"])
+    if not isinstance(guard, dict):
+        return guard
+
+    cust = next((c for c in MOCK_CUSTOMERS if c["customer_id"] == customer_id), MOCK_CUSTOMERS[0])
+
+    return f"""
+    <html>
+        <head>
+            <title>ข้อมูลลูกค้า: {cust['customer_name']}</title>
+            <style>
+                body {{ font-family: 'Inter', sans-serif; background: #f1f5f9; margin: 0; padding: 30px; color: #334155; }}
+                .container {{ max-width: 1100px; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); margin: auto; }}
+                .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 25px; margin-top: 20px; }}
+                .box {{ background: #f8fafc; border: 1px solid #e2e8f0; padding: 20px; border-radius: 8px; }}
+                .chat-box {{ height: 320px; border: 1px solid #cbd5e1; background: white; border-radius: 6px; padding: 15px; overflow-y: auto; margin-bottom: 12px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <a href="/customers" style="text-decoration:none; color:#2563eb; font-weight:600; font-size:14px;">← กลับหน้ารายชื่อลูกค้า</a>
+                <h2 style="color: #0f172a; margin-top: 15px;">👤 รายละเอียดลูกค้า: {cust['customer_name']} <span style="font-size:14px; color:#64748b;">({cust['customer_id']})</span></h2>
+                
+                <div class="grid">
+                    <div class="box">
+                        <h3 style="margin-top:0; color:#1e293b; font-size:16px;">📋 ข้อมูลโครงการและสถานะ</h3>
+                        <p><b>ช่องทางติดต่อ:</b> {cust['contact_channel']}</p>
+                        <p><b>AI ผู้ดูแล:</b> {cust['admin_ai']}</p>
+                        <p><b>สถานะงาน:</b> <span style="color:#0284c7; font-weight:600;">{cust['status']}</span></p>
+                        <p><b>รายละเอียดโปรเจกต์:</b> {cust['project_details']}</p>
+                        <p><b>ราคาที่เสนอ:</b> <span style="color:#16a34a; font-weight:600;">{cust['budget']}</span></p>
+                        
+                        <h4 style="margin-bottom:8px; font-size:14px;">🖼️ รูปภาพหน้างาน / ตัวอย่างแบบ</h4>
+                        <div style="display:flex; gap:10px;">
+                            <img src="{cust['images'][0]}" style="width:120px; height:80px; object-fit:cover; border-radius:6px; border:1px solid #cbd5e1;">
+                        </div>
+                    </div>
+
+                    <div class="box">
+                        <h3 style="margin-top:0; color:#1e293b; font-size:16px;">💬 แชทและประวัติการสนทนา</h3>
+                        <div class="chat-box">
+                            <div style="margin-bottom:10px;"><b style="color:#d97706;">ลูกค้า:</b> สวัสดีครับ สนใจทำฟาซาดอาคารครับ</div>
+                            <div style="margin-bottom:10px;"><b style="color:#2563eb;">AI:</b> สวัสดีครับ ยินดีให้บริการครับ ขอทราบขนาดพื้นที่หน้างานคร่าวๆ ด้วยครับ</div>
+                        </div>
+                        <form method="POST" action="/customers/{customer_id}/send" style="display:flex; gap:8px;">
+                            <input type="text" name="message" placeholder="พิมพ์ข้อความตอบกลับ..." required style="flex-grow:1; padding:10px; border:1px solid #cbd5e1; border-radius:6px;">
+                            <button type="submit" style="background:#10b981; color:white; border:none; padding:10px 16px; border-radius:6px; cursor:pointer; font-weight:600;">ส่ง</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </body>
+    </html>
+    """
+
+@app.post("/customers/{customer_id}/send")
+async def send_customer_chat(customer_id: str, message: str = Form(...)):
+    return RedirectResponse(url=f"/customers/{customer_id}", status_code=303)
 
 
 @app.get("/delete/{admin_id}")
