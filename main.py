@@ -19,6 +19,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ----------------------------------------------------
 # 🔑 ตั้งค่า Gemini API Key และ Google Apps Script URL
+#    (อ่านจาก Environment Variables บน Render — ห้าม hardcode คีย์ในโค้ด)
 # ----------------------------------------------------
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 if GEMINI_API_KEY:
@@ -44,7 +45,6 @@ CONNECTED_CHANNELS = [
 ADMINS_DB = []
 CHAT_SESSIONS_DB = {}
 EMPLOYEES_DB: List[dict] = []
-CRM_DB: List[dict] = []  # ฐานข้อมูลสำหรับหน้า CRM ใหม่
 
 # ----------------------------------------------------
 # 👥 คำอธิบายและชื่อตำแหน่งพนักงาน AI ภายในบริษัท
@@ -57,13 +57,16 @@ AI_ROLES = {
     "procurement": {"name": "ฝ่ายจัดซื้อและประสานงาน", "desc": "สรุปรายการสั่งซื้อ สั่งของเพิ่มกับซัพพลายเออร์ และกำหนดส่งมอบ"}
 }
 
+
 # ======================================================
 # ======  AUTH / ROLE CONFIG (ระบบ Login + สิทธิ์)  =====
 # ======================================================
 SECRET_KEY = os.environ.get("SESSION_SECRET_KEY")
 if not SECRET_KEY:
     SECRET_KEY = secrets.token_hex(32)
-    print("[WARNING] ไม่พบ SESSION_SECRET_KEY ใน Environment Variables — ใช้ค่าสุ่มชั่วคราว")
+    print("[WARNING] ไม่พบ SESSION_SECRET_KEY ใน Environment Variables — "
+          "ใช้ค่าสุ่มชั่วคราว (session จะหลุดทุกครั้งที่ redeploy) "
+          "กรุณาตั้งค่า SESSION_SECRET_KEY บน Render ทันที")
 
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 8  # 8 ชั่วโมง
 
@@ -82,7 +85,6 @@ PAGE_PERMISSIONS = {
     "chat_monitor":          ["owner", "admin"],
     "admin_settings":        ["owner", "admin"],
     "employee_management":   ["owner"],
-    "crm_module":            ["owner", "admin"],  # เพิ่มสิทธิ์สำหรับเข้าหน้า CRM
     "design_module":         ["owner", "designer"],
     "price_module":          ["owner", "price_analyst", "admin"],
     "warehouse_module":      ["owner", "warehouse"],
@@ -90,10 +92,12 @@ PAGE_PERMISSIONS = {
     "qc_module":             ["owner", "qc"],
 }
 
+
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
     pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
     return f"{salt}${pwd_hash.hex()}"
+
 
 def verify_password(password: str, stored_hash: str) -> bool:
     try:
@@ -103,12 +107,14 @@ def verify_password(password: str, stored_hash: str) -> bool:
     pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
     return hmac.compare_digest(pwd_hash.hex(), hash_hex)
 
+
 def create_session_token(employee_id: int, role: str) -> str:
     expiry = int(time.time()) + SESSION_MAX_AGE_SECONDS
     payload = f"{employee_id}:{role}:{expiry}"
     signature = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
     token = f"{payload}:{signature}"
     return base64.urlsafe_b64encode(token.encode()).decode()
+
 
 def verify_session_token(token: str) -> Optional[dict]:
     try:
@@ -124,6 +130,7 @@ def verify_session_token(token: str) -> Optional[dict]:
     except Exception:
         return None
 
+
 def get_current_employee(request: Request) -> Optional[dict]:
     token = request.cookies.get("session_token")
     if not token:
@@ -136,6 +143,7 @@ def get_current_employee(request: Request) -> Optional[dict]:
         return None
     return emp
 
+
 def _forbidden_page_html() -> str:
     return """
     <html><head><title>ไม่มีสิทธิ์เข้าถึง</title></head>
@@ -146,6 +154,7 @@ def _forbidden_page_html() -> str:
     </body></html>
     """
 
+
 def auth_guard(request: Request, allowed_roles: Optional[List[str]] = None):
     emp = get_current_employee(request)
     if emp is None:
@@ -153,6 +162,7 @@ def auth_guard(request: Request, allowed_roles: Optional[List[str]] = None):
     if allowed_roles and emp["role"] not in allowed_roles:
         return HTMLResponse(content=_forbidden_page_html(), status_code=403)
     return emp
+
 
 def load_employees_from_sheet():
     global EMPLOYEES_DB
@@ -191,6 +201,7 @@ def load_employees_from_sheet():
         EMPLOYEES_DB.append(owner)
         sync_employee_to_sheet(owner)
 
+
 def sync_employee_to_sheet(emp: dict):
     if not GAS_WEB_APP_URL:
         return
@@ -204,6 +215,7 @@ def sync_employee_to_sheet(emp: dict):
     except Exception as e:
         print(f"[auth] Error syncing employee to sheet: {e}")
 
+
 def delete_employee_from_sheet(employee_id: int):
     if not GAS_WEB_APP_URL:
         return
@@ -212,8 +224,9 @@ def delete_employee_from_sheet(employee_id: int):
     except Exception as e:
         print(f"[auth] Error deleting employee from sheet: {e}")
 
+
 # ======================================================
-# ================  ข้อมูล CRM และ Logs =================
+# ================  ข้อมูลเดิมของระบบ  ==================
 # ======================================================
 
 def load_data_from_google_sheets():
@@ -322,37 +335,10 @@ def load_data_from_google_sheets():
     except Exception as e:
         print(f"Error loading data from Google Sheets: {e}")
 
-def load_crm_from_google_sheets():
-    global CRM_DB
-    try:
-        resp = requests.get(GAS_WEB_APP_URL, params={"action": "get_crm"}, timeout=10)
-        if resp.status_code == 200:
-            rows = resp.json()
-            loaded_crm = []
-            for idx, row in enumerate(rows[1:], start=1):
-                if not row or len(row) < 2: continue
-                loaded_crm.append({
-                    "customer_id": str(row[0]) if len(row) > 0 else f"C-{idx}",
-                    "customer_name": str(row[1]) if len(row) > 1 else "ไม่ระบุ",
-                    "contact_channel": str(row[2]) if len(row) > 2 else "-",
-                    "admin_ai": str(row[3]) if len(row) > 3 else "-",
-                    "design_details": str(row[4]) if len(row) > 4 else "-",
-                    "work_area": str(row[5]) if len(row) > 5 else "-",
-                    "materials": str(row[6]) if len(row) > 6 else "-",
-                    "customer_focus": str(row[7]) if len(row) > 7 else "-",
-                    "status": str(row[8]) if len(row) > 8 else "รอดำเนินการ",
-                    "quoted_price": str(row[9]) if len(row) > 9 else "-"
-                })
-            CRM_DB = loaded_crm
-    except Exception as e:
-        print(f"Error loading CRM from Google Sheets: {e}")
-        # ข้อมูลจำลองหากโหลดไม่สำเร็จ (เพื่อป้องกันหน้าเว็บพัง)
-        if not CRM_DB:
-            CRM_DB = [
-                {"customer_id": "C-001", "customer_name": "คุณสมชาย", "contact_channel": "LINE OA", "admin_ai": "Admin-1", 
-                 "design_details": "Modern Luxury", "work_area": "40 ตร.ม.", "materials": "ACP สีทอง", "customer_focus": "งานด่วน", 
-                 "status": "เสนอราคา", "quoted_price": "120,000"}
-            ]
+
+load_data_from_google_sheets()
+load_employees_from_sheet()
+
 
 def save_chat_to_google_sheet(customer_id, customer_name, message, sender_type):
     if not GAS_WEB_APP_URL:
@@ -368,6 +354,7 @@ def save_chat_to_google_sheet(customer_id, customer_name, message, sender_type):
         requests.post(GAS_WEB_APP_URL, json=payload)
     except Exception as e:
         print(f"Error syncing chat to Google Sheet: {e}")
+
 
 def sync_admin_to_sheet(admin_data):
     if not GAS_WEB_APP_URL:
@@ -391,6 +378,7 @@ def sync_admin_to_sheet(admin_data):
     except Exception as e:
         print(f"Error syncing admin to Google Sheet: {e}")
 
+
 def delete_admin_from_sheet(admin_id):
     if not GAS_WEB_APP_URL:
         return
@@ -402,6 +390,7 @@ def delete_admin_from_sheet(admin_id):
         requests.post(GAS_WEB_APP_URL, json=payload)
     except Exception as e:
         print(f"Error deleting admin from Google Sheet: {e}")
+
 
 def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: str) -> str:
     role_key = admin_info.get("ai_role", "admin")
@@ -440,18 +429,14 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
             - อ้างอิงรูปภาพตัวอย่างผลงานจากคลังข้อมูลอ้างอิงด้านล่าง
             - หากลูกค้าขอแก้ไขแบบ ให้ปรับแต่งและส่งกลับมาให้คนจริงยืนยันใหม่อีกครั้ง จนกว่าจะผ่าน
             """
-        elif role_key == "admin":
-            role_specific_instruction = f"""
-            [หน้าที่ซักถามข้อมูลเพิ่มเติมเพื่อเก็บบันทึกใน CRM]:
-            โปรดพยายามสอบถามและรวบรวมข้อมูลเหล่านี้จากลูกค้าอย่างสุภาพเพื่อประเมินงานเบื้องต้น:
-            {required_fields}
-            """
 
         profile_instruction = f"""
         [ตำแหน่งและหน้าที่พนักงาน AI]: {role_title}
         - ชื่อตัวแทน/ผู้ดูแล: {admin_info.get('name', 'Admin')}
         - บริษัท/แบรนด์: Kelyfos Facade
         - สรรพนามลงท้าย/เพศการพูดคุย: ลงท้ายด้วย '{gender_term}'
+
+        {f'[ข้อมูลที่ต้องรวบรวม]: {required_fields}' if required_fields else ''}
 
         {role_specific_instruction}
 
@@ -470,7 +455,7 @@ def call_gemini_ai(admin_info: dict, knowledge_context: str, customer_message: s
         """
 
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-3.7-flash",
             system_instruction=profile_instruction
         )
         response = model.generate_content(customer_message)
@@ -514,9 +499,11 @@ def _login_page_html(error: str = "") -> str:
     </html>
     """
 
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
     return _login_page_html()
+
 
 @app.post("/login")
 async def login_submit(username: str = Form(...), password: str = Form(...)):
@@ -527,8 +514,16 @@ async def login_submit(username: str = Form(...), password: str = Form(...)):
 
     token = create_session_token(emp["id"], emp["role"])
     response = RedirectResponse(url="/", status_code=303)
-    response.set_cookie(key="session_token", value=token, max_age=SESSION_MAX_AGE_SECONDS, httponly=True, secure=True, samesite="lax")
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
     return response
+
 
 @app.get("/logout")
 async def logout():
@@ -595,15 +590,21 @@ async def employee_list_page(request: Request):
     </html>
     """
 
+
 def _employee_form_html(emp: Optional[dict], title: str) -> str:
     emp = emp or {"id": "", "username": "", "full_name": "", "role": "admin", "status": "active"}
-    role_options = "".join(f'<option value="{key}" {"selected" if emp["role"] == key else ""}>{label}</option>' for key, label in ROLES.items())
+    role_options = "".join(
+        f'<option value="{key}" {"selected" if emp["role"] == key else ""}>{label}</option>'
+        for key, label in ROLES.items()
+    )
     status_options = f"""
         <option value="active" {"selected" if emp["status"] == "active" else ""}>ใช้งานอยู่</option>
         <option value="inactive" {"selected" if emp["status"] == "inactive" else ""}>ปิดใช้งาน</option>
     """
-    password_note = '<p style="font-size:12px; color:#64748b; margin-top:4px;">เว้นว่างไว้ถ้าไม่ต้องการเปลี่ยนรหัสผ่าน</p>' if emp["id"] else ""
-    
+    password_note = (
+        '<p style="font-size:12px; color:#64748b; margin-top:4px;">เว้นว่างไว้ถ้าไม่ต้องการเปลี่ยนรหัสผ่าน</p>'
+        if emp["id"] else ""
+    )
     return f"""
     <html>
         <head>
@@ -641,19 +642,25 @@ def _employee_form_html(emp: Optional[dict], title: str) -> str:
     </html>
     """
 
+
 @app.get("/employees/create", response_class=HTMLResponse)
 async def employee_create_page(request: Request):
     guard = auth_guard(request, PAGE_PERMISSIONS["employee_management"])
-    if not isinstance(guard, dict): return guard
+    if not isinstance(guard, dict):
+        return guard
     return _employee_form_html(None, "➕ เพิ่มพนักงานใหม่")
+
 
 @app.get("/employees/edit/{employee_id}", response_class=HTMLResponse)
 async def employee_edit_page(request: Request, employee_id: int):
     guard = auth_guard(request, PAGE_PERMISSIONS["employee_management"])
-    if not isinstance(guard, dict): return guard
+    if not isinstance(guard, dict):
+        return guard
     emp = next((e for e in EMPLOYEES_DB if e["id"] == employee_id), None)
-    if not emp: return RedirectResponse(url="/employees", status_code=303)
+    if not emp:
+        return RedirectResponse(url="/employees", status_code=303)
     return _employee_form_html(emp, f"⚙️ แก้ไขพนักงาน: {emp['full_name']}")
+
 
 @app.post("/employees/save")
 async def employee_save(
@@ -666,33 +673,52 @@ async def employee_save(
     status: str = Form("active"),
 ):
     guard = auth_guard(request, PAGE_PERMISSIONS["employee_management"])
-    if not isinstance(guard, dict): return guard
+    if not isinstance(guard, dict):
+        return guard
 
-    if role not in ROLES: role = "admin"
+    if role not in ROLES:
+        role = "admin"
 
-    duplicate = next((e for e in EMPLOYEES_DB if e["username"] == username and str(e["id"]) != employee_id), None)
+    duplicate = next(
+        (e for e in EMPLOYEES_DB if e["username"] == username and str(e["id"]) != employee_id),
+        None,
+    )
     if duplicate:
         return HTMLResponse("ชื่อผู้ใช้นี้ถูกใช้ไปแล้ว กรุณาย้อนกลับและเลือกชื่ออื่น", status_code=400)
 
     if employee_id and employee_id.isdigit():
         emp = next((e for e in EMPLOYEES_DB if e["id"] == int(employee_id)), None)
         if emp:
-            emp["username"] = username; emp["full_name"] = full_name; emp["role"] = role; emp["status"] = status
-            if password.strip(): emp["password_hash"] = hash_password(password)
+            emp["username"] = username
+            emp["full_name"] = full_name
+            emp["role"] = role
+            emp["status"] = status
+            if password.strip():
+                emp["password_hash"] = hash_password(password)
             sync_employee_to_sheet(emp)
     else:
-        if not password.strip(): return HTMLResponse("กรุณาระบุรหัสผ่านสำหรับพนักงานใหม่", status_code=400)
+        if not password.strip():
+            return HTMLResponse("กรุณาระบุรหัสผ่านสำหรับพนักงานใหม่", status_code=400)
         max_id = max([e["id"] for e in EMPLOYEES_DB]) if EMPLOYEES_DB else 0
-        new_emp = {"id": max_id + 1, "username": username, "password_hash": hash_password(password), "full_name": full_name, "role": role, "status": status}
+        new_emp = {
+            "id": max_id + 1,
+            "username": username,
+            "password_hash": hash_password(password),
+            "full_name": full_name,
+            "role": role,
+            "status": status,
+        }
         EMPLOYEES_DB.append(new_emp)
         sync_employee_to_sheet(new_emp)
 
     return RedirectResponse(url="/employees", status_code=303)
 
+
 @app.get("/employees/delete/{employee_id}")
 async def employee_delete(request: Request, employee_id: int):
     guard = auth_guard(request, PAGE_PERMISSIONS["employee_management"])
-    if not isinstance(guard, dict): return guard
+    if not isinstance(guard, dict):
+        return guard
 
     current_emp = guard
     if current_emp["id"] == employee_id:
@@ -711,7 +737,8 @@ async def employee_delete(request: Request, employee_id: int):
 @app.get("/", response_class=HTMLResponse)
 async def main_dashboard(request: Request):
     guard = auth_guard(request, PAGE_PERMISSIONS["dashboard"])
-    if not isinstance(guard, dict): return guard
+    if not isinstance(guard, dict):
+        return guard
     employee = guard
 
     load_data_from_google_sheets()
@@ -751,9 +778,6 @@ async def main_dashboard(request: Request):
             </tr>
             """
 
-    # เพิ่มปุ่มทางลัดไปหน้า CRM ใน Dashboard
-    crm_button_html = '<a href="/crm" class="btn-action" style="background:#0284c7; margin-right:10px;">👥 ระบบดูแลลูกค้า (CRM)</a>'
-    
     employee_menu_html = ""
     if employee["role"] == "owner":
         employee_menu_html = '<a href="/employees" class="btn-action btn-gray" style="margin-right:10px;">👥 จัดการพนักงาน</a>'
@@ -791,7 +815,6 @@ async def main_dashboard(request: Request):
                 <div class="header">
                     <h2>🤖 ศูนย์ควบคุม AI สำหรับผู้ดูแลระบบ</h2>
                     <div class="header-right">
-                        {crm_button_html}
                         {employee_menu_html}
                         <a href="/create-role" class="btn-create">+ สร้างพนักงาน</a>
                     </div>
@@ -822,95 +845,17 @@ async def main_dashboard(request: Request):
     """
     return HTMLResponse(content=html_content)
 
+
 @app.get("/delete/{admin_id}")
 async def delete_admin(request: Request, admin_id: int):
     guard = auth_guard(request, PAGE_PERMISSIONS["admin_settings"])
-    if not isinstance(guard, dict): return guard
+    if not isinstance(guard, dict):
+        return guard
 
     delete_admin_from_sheet(admin_id)
     global ADMINS_DB
     ADMINS_DB = [a for a in ADMINS_DB if a["id"] != admin_id]
     return RedirectResponse(url="/", status_code=303)
-
-
-# ======================================================
-# ===============  หน้า Customer CRM  ===================
-# ======================================================
-@app.get("/crm", response_class=HTMLResponse)
-async def customer_crm_page(request: Request):
-    guard = auth_guard(request, PAGE_PERMISSIONS["crm_module"])
-    if not isinstance(guard, dict): return guard
-
-    load_crm_from_google_sheets()
-
-    rows_html = ""
-    if not CRM_DB:
-        rows_html = "<tr><td colspan='10' style='text-align: center; color: #64748b; padding: 20px;'>ยังไม่มีข้อมูลลูกค้าในระบบ</td></tr>"
-    else:
-        for c in CRM_DB:
-            status_color = "#2563eb" if c.get("status") == "รอดำเนินการ" else "#059669"
-            rows_html += f"""
-            <tr>
-                <td style="font-weight: 600; color: #0f172a;">{c.get('customer_name')} <br><span style="font-size:11px; color:#64748b; font-weight:normal;">({c.get('customer_id')})</span></td>
-                <td><span style="background: #f1f5f9; color: #334155; padding: 4px 8px; border-radius: 4px; font-size: 12px;">{c.get('contact_channel')}</span></td>
-                <td style="color: #475569; font-size: 13px;">{c.get('admin_ai')}</td>
-                <td style="color: #0369a1; font-size: 13px; font-weight: 500;">{c.get('design_details')}</td>
-                <td style="color: #0369a1; font-size: 13px; font-weight: 500;">{c.get('work_area')}</td>
-                <td style="color: #0369a1; font-size: 13px; font-weight: 500;">{c.get('materials')}</td>
-                <td style="color: #b45309; font-size: 13px; font-weight: 600;">{c.get('customer_focus')}</td>
-                <td><span style="color: {status_color}; font-weight: 600; font-size: 13px;">{c.get('status')}</span></td>
-                <td style="color: #475569; font-size: 13px;">{c.get('quoted_price')}</td>
-                <td>
-                    <button style="background: #cbd5e1; color: #334155; border: none; padding: 6px 10px; border-radius: 4px; font-size: 12px; cursor: pointer;">แก้ไข</button>
-                </td>
-            </tr>
-            """
-
-    html_content = f"""
-    <html>
-        <head>
-            <title>ระบบดูแลลูกค้า (CRM)</title>
-            <style>
-                body {{ font-family: 'Inter', sans-serif; background: #f1f5f9; margin: 0; padding: 20px; color: #334155; }}
-                .container {{ max-width: 1400px; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); margin: auto; }}
-                .back-link {{ text-decoration: none; color: #2563eb; font-weight: 600; font-size: 14px; display: inline-block; margin-bottom: 15px; }}
-                table {{ width: 100%; border-collapse: collapse; min-width: 1000px; }}
-                th, td {{ border-bottom: 1px solid #e2e8f0; padding: 14px 10px; text-align: left; vertical-align: middle; line-height:1.4; }}
-                th {{ font-size: 13px; font-weight: 600; text-transform: uppercase; }}
-                tr:hover {{ background-color: #f8fafc; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <a href="/" class="back-link">← กลับหน้าหลัก (Dashboard)</a>
-                <h2 style="color: #0f172a; margin-top: 0; margin-bottom: 25px; font-size: 22px;">👥 ระบบดูแลลูกค้า (Customer CRM & Chat Hub)</h2>
-                
-                <div style="overflow-x: auto;">
-                    <table>
-                        <thead>
-                            <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0;">
-                                <th style="color: #475569; width: 12%;">ชื่อลูกค้า</th>
-                                <th style="color: #475569; width: 10%;">ช่องทางติดต่อ</th>
-                                <th style="color: #475569; width: 10%;">AI ผู้ดูแล</th>
-                                <th style="background: #e0f2fe; color: #0284c7; width: 14%;">🎨 รูปแบบที่ต้องการ</th>
-                                <th style="background: #e0f2fe; color: #0284c7; width: 10%;">📏 พื้นที่งาน</th>
-                                <th style="background: #e0f2fe; color: #0284c7; width: 12%;">🧱 วัสดุ</th>
-                                <th style="background: #fff7ed; color: #c2410c; width: 12%;">⭐ สิ่งที่เน้น</th>
-                                <th style="color: #475569; width: 8%;">สถานะงาน</th>
-                                <th style="color: #475569; width: 7%;">ราคาเสนอ</th>
-                                <th style="color: #475569; width: 5%;">การกระทำ</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {rows_html}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
 
 
 # ======================================================
@@ -920,7 +865,8 @@ async def customer_crm_page(request: Request):
 @app.get("/create-role", response_class=HTMLResponse)
 async def create_role_page(request: Request):
     guard = auth_guard(request, PAGE_PERMISSIONS["admin_settings"])
-    if not isinstance(guard, dict): return guard
+    if not isinstance(guard, dict):
+        return guard
 
     cards_html = ""
     for r_key, r_info in AI_ROLES.items():
@@ -955,6 +901,7 @@ async def create_role_page(request: Request):
     </html>
     """
 
+
 # ======================================================
 # ===============  หน้าฟอร์มสร้าง/ตั้งค่า AI (รองรับเลือก Role)  =
 # ======================================================
@@ -966,14 +913,11 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
     if not isinstance(guard, dict):
         return guard
 
-    # เปลี่ยนแปลง Default Prompt ของ Required Data Fields เพื่อให้ AI ซักถาม 4 หัวข้อที่คุณต้องการไปใส่ CRM
-    default_required_fields = "1. รายละเอียดรูปแบบที่ลูกค้าต้องการ\n2. พื้นที่งาน (ขนาด กว้างxยาว)\n3. วัสดุที่ลูกค้าสนใจ\n4. สิ่งที่ลูกค้าเน้นหรือให้ความสำคัญเป็นพิเศษ"
-
     admin_data = {
         "id": "", "name": "", "ai_role": role, "gender": "ครับ", "channels": [],
         "keywords": "ออกแบบเสร็จ, ติดปัญหา, ลูกค้าให้ออกแบบใหม่แล้วไม่ผ่าน2รอบแล้ว",
         "system_prompt": "คุณคือแอดมิน AI อัจฉริยะ ตอบคำถามกระชับ เป็นมืออาชีพ ตรงประเด็น",
-        "required_data_fields": default_required_fields,
+        "required_data_fields": "ขนาดพื้นที่, รูปภาพหน้างาน, เบอร์โทรติดต่อลูกค้า",
         "design_style": "Modern Luxury, Parametric Design",
         "material_specs": "แผงอลูมิเนียมคอมโพสิต ACP, โครงเหล็กมาตรฐาน",
         "portfolio_link": "",
@@ -991,7 +935,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
     role_title = AI_ROLES.get(role, {}).get("name", "พนักงาน AI")
     title = f"⚙️ ตั้งค่าพนักงาน [{role_title}]: {admin_data['name']}" if admin_id else f"➕ สร้างพนักงานใหม่: {role_title}"
 
-    # ฟิลด์เฉพาะสำหรับ Designer
+    # ฟิลด์เฉพาะสำหรับ Designer (เอาช่องลิงก์คลังรูปภาพออกแล้ว)
     role_specific_fields_html = ""
     if role == "designer":
         role_specific_fields_html = f"""
@@ -1059,13 +1003,14 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
         </div>
         """
 
+    # เอาส่วนข้อมูลที่ต้องการให้ AI ซักถามออกเฉพาะ Designer
     required_data_section = ""
     if role != "designer":
         required_data_section = f"""
         <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:20px; border-radius:8px; margin-top:20px;">
-            <label style="font-weight:600; color:#1e40af; margin-top:0; display:block;">📋 ข้อมูลที่ต้องการให้ AI ซักถามและรวบรวมจากลูกค้าเพื่อเก็บลง CRM</label>
-            <p style="font-size:13px; color:#3b82f6; margin-top:4px; margin-bottom:10px;">ระบุสิ่งที่ต้องการให้ AI พยายามถามลูกค้าให้ครบถ้วน เพื่อให้ทีมงานนำข้อมูลไปลงในหน้า CRM ต่อได้ง่ายขึ้น</p>
-            <textarea name="required_data_fields" style="width:100%; height:100px; padding:10px; border:1px solid #93c5fd; border-radius:6px; background:white;">{admin_data.get('required_data_fields', '')}</textarea>
+            <label style="font-weight:600; color:#1e40af; margin-top:0; display:block;">📋 ข้อมูลที่ต้องการให้ AI ซักถามและรวบรวมจากลูกค้า</label>
+            <p style="font-size:13px; color:#3b82f6; margin-top:4px; margin-bottom:10px;">ระบุสิ่งที่ต้องการให้ AI เจาะถามลูกค้า เช่น ขนาดพื้นที่, รูปภาพหน้างาน, เบอร์โทรติดต่อ ฯลฯ</p>
+            <textarea name="required_data_fields" style="width:100%; height:80px; padding:10px; border:1px solid #93c5fd; border-radius:6px; background:white;">{admin_data.get('required_data_fields', '')}</textarea>
         </div>
         """
     else:
@@ -1175,6 +1120,7 @@ async def edit_admin_page(request: Request, admin_id: Optional[int] = None, role
         </body>
     </html>
     """
+
 
 @app.post("/save-admin")
 async def save_admin(
@@ -1338,6 +1284,7 @@ async def verify_facebook_webhook(
     if mode == "subscribe" and token == FB_VERIFY_TOKEN:
         return PlainTextResponse(challenge)
     raise HTTPException(status_code=403, detail="Verification token mismatch")
+
 
 @app.post("/webhook")
 async def receive_facebook_webhook(request: Request):
